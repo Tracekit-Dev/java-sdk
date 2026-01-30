@@ -35,6 +35,12 @@
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
 
+        <!-- OpenTelemetry Semantic Conventions -->
+        <dependency>
+            <groupId>io.opentelemetry.semconv</groupId>
+            <artifactId>opentelemetry-semconv</artifactId>
+        </dependency>
+
         <!-- OkHttp for HTTP client -->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
