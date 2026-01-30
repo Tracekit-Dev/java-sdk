@@ -128,17 +128,33 @@ public class Application {
 }
 ```
 
-### Kotlin DSL (Coming Soon)
+### Kotlin Usage
+
+Kotlin developers can use the Java API directly (100% Kotlin-compatible):
 
 ```kotlin
-// Future API - not yet implemented
-TraceKit.configure {
-    apiKey = System.getenv("TRACEKIT_API_KEY")
-    serviceName = "my-service"
-    environment = "production"
-    enableCodeMonitoring = true
+import dev.tracekit.TracekitSDK
+import dev.tracekit.TracekitConfig
+
+fun main() {
+    // Initialize SDK using Java API (works perfectly in Kotlin)
+    val config = TracekitConfig.builder()
+        .apiKey(System.getenv("TRACEKIT_API_KEY"))
+        .serviceName("my-service")
+        .environment("production")
+        .enableCodeMonitoring(true)
+        .build()
+
+    val sdk = TracekitSDK.create(config)
+
+    // Your application code here...
+
+    // Shutdown on application exit
+    Runtime.getRuntime().addShutdownHook(Thread { sdk.shutdown() })
 }
 ```
+
+**Note**: A Kotlin-specific DSL with idiomatic extensions is planned for a future release.
 
 ## Modules
 
