@@ -70,7 +70,7 @@ tracekit:
   service-name: my-service
   environment: production
   endpoint: https://api.tracekit.dev/v1/traces
-  enable-security-scanning: true
+  enable-code-monitoring: true  # Enables snapshot capture with automatic security scanning
 ```
 
 Or in `application.properties`:
@@ -81,7 +81,7 @@ tracekit.api-key=${TRACEKIT_API_KEY}
 tracekit.service-name=my-service
 tracekit.environment=production
 tracekit.endpoint=https://api.tracekit.dev/v1/traces
-tracekit.enable-security-scanning=true
+tracekit.enable-code-monitoring=true
 ```
 
 3. That's it! The SDK auto-configures and starts tracing automatically.
@@ -101,7 +101,7 @@ public class Application {
             .apiKey(System.getenv("TRACEKIT_API_KEY"))
             .serviceName("my-service")
             .environment("production")
-            .enableSecurityScanning(true)
+            .enableCodeMonitoring(true)  // Enables snapshot capture with automatic security scanning
             .build();
 
         TracekitSDK sdk = TracekitSDK.create(config);
@@ -132,7 +132,7 @@ TraceKit.configure {
     apiKey = System.getenv("TRACEKIT_API_KEY")
     serviceName = "my-service"
     environment = "production"
-    enableSecurityScanning = true
+    enableCodeMonitoring = true
 }
 ```
 
@@ -167,8 +167,7 @@ TraceKit.configure {
 | `tracekit.service-name` | string | - | Service name in traces (required) |
 | `tracekit.environment` | string | `production` | Deployment environment |
 | `tracekit.endpoint` | string | `https://app.tracekit.dev/v1/traces` | Cloud endpoint URL |
-| `tracekit.enable-code-monitoring` | boolean | `false` | Enable code monitoring features |
-| `tracekit.enable-security-scanning` | boolean | `false` | Enable security scanning |
+| `tracekit.enable-code-monitoring` | boolean | `true` | Enable snapshot capture (includes automatic security scanning) |
 | `tracekit.local-ui-port` | int | `9999` | Port for local UI auto-detection |
 
 ### Programmatic Configuration
@@ -179,21 +178,21 @@ TracekitConfig config = TracekitConfig.builder()
     .serviceName("my-service")
     .environment("production")
     .endpoint("https://api.tracekit.dev/v1/traces")
-    .enableCodeMonitoring(false)
-    .enableSecurityScanning(true)
+    .enableCodeMonitoring(true)  // Enables snapshot capture with automatic security scanning
     .localUIPort(9999)
     .build();
 ```
 
 ## Security Scanning
 
-TraceKit automatically scans trace data for sensitive information when `enable-security-scanning` is enabled:
+TraceKit automatically scans captured snapshots for sensitive information when code monitoring is enabled (`enable-code-monitoring: true`):
 
 - **PII Detection**: Email addresses, phone numbers, SSNs, credit cards
-- **Credential Detection**: API keys, passwords, tokens, private keys
-- **Custom Patterns**: Extend with your own sensitive data patterns
+- **Credential Detection**: API keys (AWS, Stripe, OpenAI, etc.), passwords, tokens, private keys
+- **Automatic Redaction**: Sensitive values are replaced with `[REDACTED]` before sending to the backend
+- **Security Flags**: Each detection creates a security flag with severity level (CRITICAL, HIGH, MEDIUM, LOW)
 
-Detected sensitive data is flagged but not automatically redacted, allowing you to review and configure appropriate handling.
+Security scanning happens automatically for all `captureSnapshot()` calls - no additional configuration needed.
 
 ## Local Development
 
@@ -221,12 +220,6 @@ Each example includes:
 - **Build Tools**: Maven 3.6+ or Gradle 7.0+
 - **Dependencies**: Managed via BOM (Bill of Materials)
 
-## Documentation
-
-- [Architecture Overview](docs/architecture.md) - Coming soon
-- [Spring Boot Integration](docs/spring-boot.md) - Coming soon
-- [Security Scanning Guide](docs/security.md) - Coming soon
-- [API Documentation](https://docs.tracekit.dev/java-sdk) - Coming soon
 
 ## Building from Source
 

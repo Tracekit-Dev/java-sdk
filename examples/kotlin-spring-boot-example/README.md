@@ -1,6 +1,6 @@
-# TraceKit Spring Boot Example
+# TraceKit Kotlin Spring Boot Example
 
-This example demonstrates how to integrate TraceKit APM into a Spring Boot application using the TraceKit Spring Boot Starter.
+This example demonstrates how to integrate TraceKit APM into a Kotlin Spring Boot application using the TraceKit Spring Boot Starter.
 
 ## Features
 
@@ -12,12 +12,14 @@ This demo application showcases:
 - **Security Scanning**: Automatic detection of hardcoded secrets, API keys, and sensitive data
 - **Code Monitoring**: Snapshot-based debugging with variable capture
 - **Custom Configuration**: YAML-based configuration for all TraceKit settings
+- **Kotlin Idiomatic**: Uses Kotlin features like data classes, extension functions, and null safety
 - **Local Development**: Built-in support for the TraceKit Local UI
 - **Production Ready**: Easy configuration for cloud deployment
 
 ## Prerequisites
 
 - Java 11 or higher
+- Kotlin 1.9+ (included via Maven)
 - Maven 3.6+
 - TraceKit API key (for cloud reporting) - [Sign up here](https://tracekit.dev)
 - Optional: TraceKit Local UI running on `http://localhost:3000` (for local development)
@@ -49,17 +51,17 @@ mvn spring-boot:run
 Or run the JAR directly:
 
 ```bash
-java -jar target/spring-boot-example-1.0.0-SNAPSHOT.jar
+java -jar target/kotlin-spring-boot-example-1.0.0-SNAPSHOT.jar
 ```
 
-The application will start on `http://localhost:8080`.
+The application will start on `http://localhost:8082` (note: port 8082 to avoid conflicts with the Java example).
 
 ## Testing the Endpoints
 
 ### Welcome Endpoint
 
 ```bash
-curl http://localhost:8080/
+curl http://localhost:8082/
 ```
 
 Returns a welcome message with available endpoints.
@@ -68,18 +70,18 @@ Returns a welcome message with available endpoints.
 
 ```bash
 # Successful lookup
-curl http://localhost:8080/users/1
-curl http://localhost:8080/users/2
-curl http://localhost:8080/users/3
+curl http://localhost:8082/users/1
+curl http://localhost:8082/users/2
+curl http://localhost:8082/users/3
 
 # Not found (404)
-curl http://localhost:8080/users/999
+curl http://localhost:8082/users/999
 ```
 
 ### Error Simulation Endpoint
 
 ```bash
-curl http://localhost:8080/error
+curl http://localhost:8082/error
 ```
 
 This endpoint randomly throws different exceptions to demonstrate error tracking.
@@ -87,7 +89,7 @@ This endpoint randomly throws different exceptions to demonstrate error tracking
 ### Payment Processing Endpoint (Security Scanning Demo)
 
 ```bash
-curl -X POST http://localhost:8080/process-payment \
+curl -X POST http://localhost:8082/process-payment \
   -H "Content-Type: application/json" \
   -d '{
     "amount": 5000,
@@ -128,7 +130,7 @@ If you have the TraceKit Local UI running on `http://localhost:3000`:
 1. Make requests to the demo endpoints
 2. Log in to your TraceKit account at [https://app.tracekit.dev](https://app.tracekit.dev)
 3. Navigate to the "Traces" section
-4. Filter by service name: `spring-boot-demo`
+4. Filter by service name: `kotlin-sdk`
 5. Analyze performance, errors, and distributed traces
 
 ## Viewing Code Snapshots
@@ -146,7 +148,7 @@ tracekit:
 
 1. Call the payment processing endpoint to trigger snapshot registration:
    ```bash
-   curl -X POST http://localhost:8080/process-payment \
+   curl -X POST http://localhost:8082/process-payment \
      -H "Content-Type: application/json" \
      -d '{"amount": 5000, "currency": "USD", "paymentMethod": "card"}'
    ```
@@ -155,13 +157,13 @@ tracekit:
 
 3. Navigate to **Code Monitoring** → **Breakpoints**
 
-4. Find the `payment-processing` breakpoint at `DemoApplication.java:255`
+4. Find the `payment-processing` breakpoint at `DemoApplication.kt:152`
 
 5. **Enable the breakpoint** by clicking the toggle switch
 
 6. Make another request to the endpoint:
    ```bash
-   curl -X POST http://localhost:8080/process-payment \
+   curl -X POST http://localhost:8082/process-payment \
      -H "Content-Type: application/json" \
      -d '{"amount": 10000, "currency": "EUR", "paymentMethod": "card"}'
    ```
@@ -198,7 +200,7 @@ All TraceKit configuration is in `src/main/resources/application.yml` under the 
 ```yaml
 tracekit:
   api-key: your-api-key-here        # Your TraceKit API key
-  service-name: spring-boot-demo    # Service identifier in traces
+  service-name: kotlin-sdk           # Service identifier in traces
   environment: development          # Deployment environment
   enabled: true                     # Enable/disable tracing
 ```
@@ -275,7 +277,7 @@ Example:
 
 ```bash
 export TRACEKIT_API_KEY=tk_live_abc123
-export TRACEKIT_SERVICE_NAME=my-spring-app
+export TRACEKIT_SERVICE_NAME=my-kotlin-app
 export TRACEKIT_ENVIRONMENT=production
 
 mvn spring-boot:run
@@ -327,16 +329,16 @@ When code monitoring is enabled, TraceKit provides:
 ## Project Structure
 
 ```
-spring-boot-example/
+kotlin-spring-boot-example/
 ├── pom.xml                          # Maven configuration
 ├── README.md                        # This file
 └── src/
     └── main/
-        ├── java/
+        ├── kotlin/
         │   └── dev/tracekit/example/
-        │       └── DemoApplication.java    # Main application class
+        │       └── DemoApplication.kt    # Main application class
         └── resources/
-            └── application.yml              # Configuration file
+            └── application.yml           # Configuration file
 ```
 
 ## Troubleshooting
@@ -359,6 +361,7 @@ spring-boot-example/
 1. **Java Version**: Ensure you're using Java 11 or higher
 2. **Maven Version**: Update to Maven 3.6+
 3. **Clean Build**: Run `mvn clean install` in the parent directory first
+4. **Kotlin Compiler**: Ensure Kotlin 1.9+ is being used (check pom.xml)
 
 ## Advanced Usage
 
@@ -366,16 +369,19 @@ spring-boot-example/
 
 You can also configure TraceKit programmatically in your Spring Boot application:
 
-```java
+```kotlin
+import dev.tracekit.spring.TracekitConfigurationCustomizer
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+
 @Configuration
-public class TracekitConfig {
+class TracekitConfig {
+
     @Bean
-    public TracekitConfigurationCustomizer tracekitCustomizer() {
-        return config -> {
-            config.setServiceName("custom-service-name");
-            config.setEnvironment("custom-environment");
-            // Add more customizations
-        };
+    fun tracekitCustomizer() = TracekitConfigurationCustomizer { config ->
+        config.serviceName = "custom-service-name"
+        config.environment = "custom-environment"
+        // Add more customizations
     }
 }
 ```
@@ -384,22 +390,22 @@ public class TracekitConfig {
 
 Add custom instrumentation to your code:
 
-```java
-import io.opentelemetry.api.trace.Tracer;
-import io.opentelemetry.api.trace.Span;
+```kotlin
+import io.opentelemetry.api.trace.Tracer
+import io.opentelemetry.api.trace.Span
+import org.springframework.stereotype.Service
 
 @Service
-public class MyService {
+class MyService(private val tracer: Tracer) {
 
-    @Autowired
-    private Tracer tracer;
-
-    public void myMethod() {
-        Span span = tracer.spanBuilder("myCustomOperation").startSpan();
-        try {
-            // Your code here
-        } finally {
-            span.end();
+    fun myMethod() {
+        val span = tracer.spanBuilder("myCustomOperation").startSpan()
+        span.makeCurrent().use {
+            try {
+                // Your code here
+            } finally {
+                span.end()
+            }
         }
     }
 }
@@ -409,46 +415,41 @@ public class MyService {
 
 Capture variable state at specific execution points:
 
-```java
-import dev.tracekit.TracekitSDK;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.HashMap;
-import java.util.Map;
+```kotlin
+import dev.tracekit.TracekitSDK
+import org.springframework.stereotype.Service
 
 @Service
-public class PaymentService {
+class PaymentService(private val tracekitSDK: TracekitSDK) {
 
-    @Autowired
-    private TracekitSDK tracekitSDK;
-
-    public Payment processPayment(String customerId, double amount) {
+    fun processPayment(customerId: String, amount: Double): Payment {
         // Collect variables you want to inspect
-        Map<String, Object> variables = new HashMap<>();
-        variables.put("customerId", customerId);
-        variables.put("amount", amount);
-        variables.put("timestamp", System.currentTimeMillis());
+        val variables = mapOf(
+            "customerId" to customerId,
+            "amount" to amount,
+            "timestamp" to System.currentTimeMillis()
+        )
 
         // Capture snapshot - auto-registers breakpoint on first call
-        tracekitSDK.captureSnapshot("payment-start", variables);
+        tracekitSDK.captureSnapshot("payment-start", variables)
 
-        Payment payment = executePayment(customerId, amount);
+        val payment = executePayment(customerId, amount)
 
         // Capture another snapshot at a different point
-        Map<String, Object> resultVars = new HashMap<>();
-        resultVars.put("paymentId", payment.getId());
-        resultVars.put("status", payment.getStatus());
-        resultVars.put("processingTime", payment.getProcessingTimeMs());
+        val resultVars = mapOf(
+            "paymentId" to payment.id,
+            "status" to payment.status,
+            "processingTime" to payment.processingTimeMs
+        )
 
-        tracekitSDK.captureSnapshot("payment-complete", resultVars);
+        tracekitSDK.captureSnapshot("payment-complete", resultVars)
 
-        return payment;
+        return payment
     }
 
-    private Payment executePayment(String customerId, double amount) {
+    private fun executePayment(customerId: String, amount: Double): Payment {
         // Payment processing logic...
-        return new Payment();
+        return Payment()
     }
 }
 ```
@@ -466,13 +467,32 @@ public class PaymentService {
 - Capture relevant variables only (avoid capturing entire request objects)
 - Be cautious with sensitive data - the scanner will redact known patterns, but review carefully
 - Disable breakpoints in production when not actively debugging
+- Use Kotlin's null safety to avoid capturing null values
+
+**Kotlin-Specific Tips**:
+- Use `mapOf()` for creating variable maps (more idiomatic than HashMap)
+- Leverage data classes for structured snapshot data
+- Use extension functions to wrap snapshot capture for cleaner code
+- Kotlin's type inference makes the API more concise
+
+## Kotlin vs Java SDK
+
+Both examples use the **same TraceKit SDK** (written in Java). The SDK is 100% compatible with Kotlin thanks to JVM interoperability. The Kotlin example demonstrates:
+
+- **Kotlin Syntax**: Using `mapOf()`, data classes, and extension functions
+- **Null Safety**: Leveraging Kotlin's type system for safer code
+- **Conciseness**: More compact code compared to Java
+- **Spring Boot Integration**: Same Spring Boot auto-configuration works seamlessly
+
+Choose the language that fits your project - the TraceKit SDK works identically in both!
 
 ## Next Steps
 
-1. **Explore the Code**: Review `DemoApplication.java` to see how simple the integration is
+1. **Explore the Code**: Review `DemoApplication.kt` to see Kotlin-idiomatic integration
 2. **Customize Configuration**: Modify `application.yml` to match your needs
-3. **Add to Your Project**: Copy this configuration to your own Spring Boot application
+3. **Add to Your Project**: Copy this configuration to your own Kotlin Spring Boot application
 4. **Monitor Production**: Deploy with production API key and monitor real traffic
+5. **Learn More**: Check out the Java example for comparison and additional patterns
 
 ## Support
 

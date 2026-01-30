@@ -1,6 +1,7 @@
 package dev.tracekit;
 
 import dev.tracekit.local.LocalUIDetector;
+import dev.tracekit.snapshot.SnapshotClient;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Tracer;
@@ -13,6 +14,7 @@ import io.opentelemetry.semconv.ResourceAttributes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -62,6 +64,7 @@ public final class TracekitSDK {
     private final TracekitClient client;
     private final OpenTelemetry openTelemetry;
     private final SdkTracerProvider tracerProvider;
+    private final SnapshotClient snapshotClient;
     private volatile boolean isShutdown = false;
 
     /**
@@ -96,6 +99,19 @@ public final class TracekitSDK {
         // Set up OpenTelemetry SDK
         this.tracerProvider = createTracerProvider(config);
         this.openTelemetry = buildOpenTelemetry(tracerProvider, registerGlobal);
+
+        // Initialize SnapshotClient if code monitoring is enabled
+        if (config.isEnableCodeMonitoring()) {
+            this.snapshotClient = new SnapshotClient(
+                config.getApiKey(),
+                config.getEndpoint().replace("/v1/traces", ""),
+                config.getServiceName()
+            );
+            this.snapshotClient.start();
+            logger.info("Code monitoring enabled - Snapshot client started");
+        } else {
+            this.snapshotClient = null;
+        }
 
         logger.info("Tracekit SDK initialized successfully. Cloud endpoint: {}, Local endpoint: {}",
                 config.getEndpoint(), localEndpoint != null ? localEndpoint : "none");
@@ -221,6 +237,19 @@ public final class TracekitSDK {
     }
 
     /**
+     * Captures a snapshot of local variables at the current code location.
+     * This is only active if code monitoring is enabled and there's an active breakpoint.
+     *
+     * @param label a unique label identifying this capture point
+     * @param variables map of variable names to values to capture
+     */
+    public void captureSnapshot(String label, Map<String, Object> variables) {
+        if (snapshotClient != null) {
+            snapshotClient.checkAndCaptureWithContext(label, variables);
+        }
+    }
+
+    /**
      * Shuts down the SDK and releases all resources.
      *
      * <p>This method is idempotent and can be called multiple times safely.
@@ -242,6 +271,11 @@ public final class TracekitSDK {
             logger.info("Shutting down Tracekit SDK for service: {}", config.getServiceName());
 
             try {
+                // Stop snapshot client if running
+                if (snapshotClient != null) {
+                    snapshotClient.stop();
+                }
+
                 // Close the tracer provider (this will flush pending spans)
                 tracerProvider.close();
                 isShutdown = true;

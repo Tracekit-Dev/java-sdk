@@ -1,18 +1,29 @@
 package dev.tracekit.example;
 
+import dev.tracekit.TracekitSDK;
+import dev.tracekit.security.SensitiveDataDetector;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 /**
  * Spring Boot demo application showcasing TraceKit APM integration.
@@ -29,6 +40,11 @@ public class DemoApplication {
 
     private static final Logger logger = LoggerFactory.getLogger(DemoApplication.class);
 
+    @Autowired
+    private TracekitSDK tracekitSDK;
+
+    private Tracer tracer;
+
     // Simulated user database
     private static final Map<String, User> USERS = new HashMap<>();
 
@@ -42,23 +58,41 @@ public class DemoApplication {
         SpringApplication.run(DemoApplication.class, args);
     }
 
+    @Autowired
+    public void setTracekitSDK(TracekitSDK sdk) {
+        this.tracekitSDK = sdk;
+        this.tracer = sdk.getTracer("demo-application");
+        logger.info("TraceKit SDK injected and tracer initialized");
+    }
+
     /**
      * Welcome endpoint - demonstrates basic request tracing.
      */
     @GetMapping("/")
     public Map<String, Object> welcome() {
-        logger.info("Welcome endpoint called");
+        Span span = tracer.spanBuilder("GET /").startSpan();
+        try (Scope scope = span.makeCurrent()) {
+            logger.info("Welcome endpoint called");
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("message", "Welcome to TraceKit Spring Boot Example!");
-        response.put("version", "1.0.0");
-        response.put("endpoints", new String[]{
-            "GET / - This welcome message",
-            "GET /users/{id} - Get user by ID (try 1, 2, or 3)",
-            "GET /error - Simulate an error for testing"
-        });
+            span.setAttribute("http.method", "GET");
+            span.setAttribute("http.route", "/");
 
-        return response;
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "Welcome to TraceKit Spring Boot Example!");
+            response.put("version", "1.0.0");
+            response.put("endpoints", new String[]{
+                "GET / - This welcome message",
+                "GET /users/{id} - Get user by ID (try 1, 2, or 3)",
+                "GET /error - Simulate an error for testing",
+                "POST /scan - Scan code for security issues",
+                "POST /process-payment - Process payment with snapshot capture"
+            });
+
+            span.setStatus(StatusCode.OK);
+            return response;
+        } finally {
+            span.end();
+        }
     }
 
     /**
@@ -66,22 +100,39 @@ public class DemoApplication {
      */
     @GetMapping("/users/{id}")
     public ResponseEntity<?> getUser(@PathVariable String id) {
-        logger.info("Looking up user with ID: {}", id);
+        Span span = tracer.spanBuilder("GET /users/{id}").startSpan();
+        try (Scope scope = span.makeCurrent()) {
+            logger.info("Looking up user with ID: {}", id);
 
-        // Simulate random processing delay
-        simulateProcessing();
+            span.setAttribute("http.method", "GET");
+            span.setAttribute("http.route", "/users/{id}");
+            span.setAttribute("user.id", id);
 
-        User user = USERS.get(id);
-        if (user == null) {
-            logger.warn("User not found: {}", id);
-            Map<String, String> error = new HashMap<>();
-            error.put("error", "User not found");
-            error.put("userId", id);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            // Simulate random processing delay
+            simulateProcessing();
+
+            User user = USERS.get(id);
+            if (user == null) {
+                logger.warn("User not found: {}", id);
+                span.setAttribute("user.found", false);
+                span.setAttribute("http.status_code", 404);
+                span.setStatus(StatusCode.OK);
+
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "User not found");
+                error.put("userId", id);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            }
+
+            logger.info("User found: {}", user.getName());
+            span.setAttribute("user.found", true);
+            span.setAttribute("user.name", user.getName());
+            span.setAttribute("http.status_code", 200);
+            span.setStatus(StatusCode.OK);
+            return ResponseEntity.ok(user);
+        } finally {
+            span.end();
         }
-
-        logger.info("User found: {}", user.getName());
-        return ResponseEntity.ok(user);
     }
 
     /**
@@ -89,18 +140,137 @@ public class DemoApplication {
      */
     @GetMapping("/error")
     public ResponseEntity<?> simulateError() {
-        logger.error("Error endpoint called - simulating exception");
+        Span span = tracer.spanBuilder("GET /error").startSpan();
+        try (Scope scope = span.makeCurrent()) {
+            logger.error("Error endpoint called - simulating exception");
 
-        // Simulate different types of errors randomly
-        int errorType = ThreadLocalRandom.current().nextInt(3);
+            span.setAttribute("http.method", "GET");
+            span.setAttribute("http.route", "/error");
 
-        switch (errorType) {
-            case 0:
-                throw new RuntimeException("Simulated runtime exception for testing");
-            case 1:
-                throw new IllegalStateException("Simulated illegal state for testing");
-            default:
-                throw new NullPointerException("Simulated null pointer exception for testing");
+            // Simulate different types of errors randomly
+            int errorType = ThreadLocalRandom.current().nextInt(3);
+
+            RuntimeException exception;
+            switch (errorType) {
+                case 0:
+                    exception = new RuntimeException("Simulated runtime exception for testing");
+                    break;
+                case 1:
+                    exception = new IllegalStateException("Simulated illegal state for testing");
+                    break;
+                default:
+                    exception = new NullPointerException("Simulated null pointer exception for testing");
+                    break;
+            }
+
+            span.recordException(exception);
+            span.setStatus(StatusCode.ERROR, exception.getMessage());
+            throw exception;
+        } finally {
+            span.end();
+        }
+    }
+
+    /**
+     * Security scan endpoint - demonstrates sensitive data detection.
+     */
+    @PostMapping("/scan")
+    public ResponseEntity<Map<String, Object>> scanCode(@RequestBody Map<String, String> request) {
+        Span span = tracer.spanBuilder("POST /scan").startSpan();
+        try (Scope scope = span.makeCurrent()) {
+            logger.info("Security scan endpoint called");
+
+            span.setAttribute("http.method", "POST");
+            span.setAttribute("http.route", "/scan");
+
+            String code = request.get("code");
+            if (code == null || code.isEmpty()) {
+                span.setAttribute("http.status_code", 400);
+                span.setStatus(StatusCode.OK);
+                return ResponseEntity.badRequest().body(Map.of("error", "Code is required"));
+            }
+
+            SensitiveDataDetector detector = new SensitiveDataDetector();
+            List<SensitiveDataDetector.Finding> findings = detector.scan(code);
+
+            span.setAttribute("security.findings_count", findings.size());
+            span.setAttribute("http.status_code", 200);
+            span.setStatus(StatusCode.OK);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("findings_count", findings.size());
+            response.put("findings", findings.stream()
+                    .map(f -> Map.of(
+                            "type", f.getType(),
+                            "severity", f.getSeverity(),
+                            "line", f.getLine(),
+                            "column", f.getColumn(),
+                            "message", f.getMessage()
+                    ))
+                    .collect(Collectors.toList()));
+
+            String redacted = detector.redact(code);
+            response.put("redacted_code", redacted);
+
+            logger.info("Found {} security issues", findings.size());
+
+            return ResponseEntity.ok(response);
+        } finally {
+            span.end();
+        }
+    }
+
+    /**
+     * Payment processing endpoint - demonstrates snapshot capture with security scanning.
+     * This shows how security issues (like hardcoded API keys) are automatically detected
+     * and linked to traces when code monitoring is enabled.
+     */
+    @PostMapping("/process-payment")
+    public ResponseEntity<Map<String, Object>> processPayment(@RequestBody Map<String, Object> request) {
+        Span span = tracer.spanBuilder("POST /process-payment").startSpan();
+        try (Scope scope = span.makeCurrent()) {
+            logger.info("Payment processing endpoint called");
+
+            span.setAttribute("http.method", "POST");
+            span.setAttribute("http.route", "/process-payment");
+
+            String amount = String.valueOf(request.get("amount"));
+            String currency = String.valueOf(request.get("currency"));
+
+            span.setAttribute("payment.amount", amount);
+            span.setAttribute("payment.currency", currency);
+
+            String stripeApiKey = "sk_test_FakeKey123456789ABCDEFGHIJKL";
+            String customerId = "cus_123456789";
+            String cardNumber = "4532123456789012";
+
+            Map<String, Object> capturedVars = new HashMap<>();
+            capturedVars.put("amount", amount);
+            capturedVars.put("currency", currency);
+            capturedVars.put("stripeApiKey", stripeApiKey);
+            capturedVars.put("customerId", customerId);
+            capturedVars.put("cardNumber", cardNumber);
+            capturedVars.put("timestamp", System.currentTimeMillis());
+
+            tracekitSDK.captureSnapshot("payment-processing", capturedVars);
+
+            simulateProcessing();
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("transaction_id", "txn_" + System.currentTimeMillis());
+            response.put("amount", amount);
+            response.put("currency", currency);
+            response.put("message", "Payment processed successfully");
+
+            span.setAttribute("payment.transaction_id", response.get("transaction_id").toString());
+            span.setStatus(StatusCode.OK);
+
+            logger.info("Payment processed successfully");
+
+            return ResponseEntity.ok(response);
+        } finally {
+            span.end();
         }
     }
 

@@ -1,14 +1,14 @@
 spring:
   application:
-    name: tracekit-demo-app
+    name: tracekit-kotlin-demo
 
 server:
-  port: 8080
+  port: 8082
 
 tracekit:
   enabled: true
   api-key: ctxio_c16d0728ea99bbd5b849c6341e49dff99263018a19992faafe815e76b01dee97
-  service-name: javasdk
+  service-name: kotlin-sdk
   environment: development
   endpoint: http://localhost:8081/v1/traces
   enable-code-monitoring: true
@@ -19,5 +19,3 @@ logging:
     root: INFO
     dev.tracekit: DEBUG
     org.springframework.web: INFO
-    io.opentelemetry: DEBUG
-    io.opentelemetry.exporter: TRACE
