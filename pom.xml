@@ -31,9 +31,6 @@
     <modules>
         <module>tracekit-core</module>
         <module>tracekit-spring-boot</module>
-        <module>tracekit-kotlin</module>
-        <module>tracekit-micronaut</module>
-        <module>tracekit-quarkus</module>
     </modules>
 
     <properties>

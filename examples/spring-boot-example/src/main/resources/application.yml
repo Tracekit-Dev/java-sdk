@@ -1,0 +1,59 @@
+# Spring Boot Application Configuration
+spring:
+  application:
+    name: tracekit-demo-app
+
+# Server Configuration
+server:
+  port: 8080
+
+# TraceKit Configuration
+tracekit:
+  # API Key for TraceKit Cloud (replace with your actual API key)
+  api-key: ${TRACEKIT_API_KEY:your-api-key-here}
+
+  # Service name that will appear in traces
+  service-name: ${TRACEKIT_SERVICE_NAME:spring-boot-demo}
+
+  # Deployment environment
+  environment: ${TRACEKIT_ENVIRONMENT:development}
+
+  # Enable/disable tracing
+  enabled: true
+
+  # Sampling configuration
+  sampling:
+    # Sample rate (0.0 to 1.0, where 1.0 = 100%)
+    rate: 1.0
+
+  # Export configuration
+  export:
+    # Export endpoint (TraceKit cloud or local collector)
+    endpoint: ${TRACEKIT_ENDPOINT:https://api.tracekit.dev/v1/traces}
+
+    # Export timeout in milliseconds
+    timeout: 30000
+
+  # Local UI configuration (for development)
+  local-ui:
+    # Enable local UI trace export
+    enabled: ${TRACEKIT_LOCAL_UI_ENABLED:true}
+
+    # Local UI endpoint
+    endpoint: ${TRACEKIT_LOCAL_UI_ENDPOINT:http://localhost:3000/api/traces}
+
+  # Resource attributes (additional metadata)
+  resource:
+    attributes:
+      deployment.environment: ${TRACEKIT_ENVIRONMENT:development}
+      service.version: 1.0.0
+      service.namespace: tracekit-examples
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    dev.tracekit: DEBUG
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
