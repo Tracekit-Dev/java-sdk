@@ -268,7 +268,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 
 ## Support
 
-- **Documentation**: https://docs.tracekit.dev
+- **Documentation**: [https://docs.tracekit.dev](https://app.tracekit.dev/docs/languages/java)
 - **Issues**: https://github.com/context-io/tracekit-java-sdk/issues
 - **Email**: support@tracekit.dev
 
