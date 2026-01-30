@@ -41,6 +41,13 @@
             <artifactId>okhttp</artifactId>
         </dependency>
 
+        <!-- Okio (required by OkHttp, explicit version to fix compatibility) -->
+        <dependency>
+            <groupId>com.squareup.okio</groupId>
+            <artifactId>okio</artifactId>
+            <version>3.6.0</version>
+        </dependency>
+
         <!-- Gson for JSON -->
         <dependency>
             <groupId>com.google.code.gson</groupId>
