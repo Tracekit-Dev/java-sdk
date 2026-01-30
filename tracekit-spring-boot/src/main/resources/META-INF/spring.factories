@@ -1,0 +1,3 @@
+# Auto-configuration for Spring Boot 2.7 compatibility
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+dev.tracekit.spring.TracekitAutoConfiguration
