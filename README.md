@@ -1,5 +1,9 @@
 # TraceKit Java SDK
 
+[![Maven Central](https://img.shields.io/maven-central/v/dev.tracekit/tracekit-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/dev.tracekit/tracekit-core)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Java](https://img.shields.io/badge/Java-11+-blue.svg)](https://www.oracle.com/java/)
+
 Official Java/Kotlin SDK for TraceKit APM - OpenTelemetry-based distributed tracing and application performance monitoring for JVM applications.
 
 ## Overview
@@ -27,7 +31,7 @@ For Spring Boot applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-spring-boot-starter</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
