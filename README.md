@@ -170,11 +170,11 @@ fun main() {
 
 | Framework | Version | Support Level | Auto-Instrumentation |
 |-----------|---------|---------------|---------------------|
-| Spring Boot | 3.2.1+ | Full | Yes (via starter) |
-| Spring Framework | 6.0+ | Partial | Manual setup required |
-| Micronaut | 4.2+ | Planned | Coming soon |
-| Quarkus | 3.6+ | Planned | Coming soon |
-| Vanilla Java | 11+ | Full | Manual instrumentation |
+| Spring Boot | 3.2.1+ | ✅ Full | Yes (via starter) |
+| Spring Framework | 6.0+ | ⚠️ Partial | Manual setup required |
+| Vanilla Java | 11+ | ✅ Full | Manual instrumentation |
+
+**Coming Soon**: Micronaut and Quarkus framework integrations are planned for future releases.
 
 ## Configuration Reference
 
