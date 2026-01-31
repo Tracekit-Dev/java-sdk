@@ -32,7 +32,7 @@ For Spring Boot applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-spring-boot-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
@@ -42,7 +42,7 @@ For vanilla Java applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-core</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
@@ -51,13 +51,13 @@ For vanilla Java applications:
 For Spring Boot applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-spring-boot-starter:1.0.0-SNAPSHOT'
+implementation 'dev.tracekit:tracekit-spring-boot-starter:1.1.0'
 ```
 
 For vanilla Java applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-core:1.0.0-SNAPSHOT'
+implementation 'dev.tracekit:tracekit-core:1.1.0'
 ```
 
 ## Quick Start
