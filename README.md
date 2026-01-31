@@ -18,6 +18,7 @@ TraceKit Java SDK provides production-ready distributed tracing capabilities for
 - **Local UI Auto-Detection**: Automatically sends traces to local TraceKit UI when running in development
 - **Spring Boot Integration**: Zero-configuration auto-instrumentation via Spring Boot starter
 - **Framework Support**: HTTP requests, REST controllers, and JVM metrics automatically captured
+- **Client IP Capture**: Automatic IP detection for DDoS & traffic analysis
 - **Flexible Configuration**: Environment variables, properties files, or programmatic configuration
 - **Production-Ready**: Comprehensive error handling, resource management, and graceful shutdown
 
