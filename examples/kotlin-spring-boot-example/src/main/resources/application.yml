@@ -10,7 +10,7 @@ tracekit:
   api-key: ctxio_c16d0728ea99bbd5b849c6341e49dff99263018a19992faafe815e76b01dee97
   service-name: kotlin-sdk
   environment: development
-  endpoint: http://localhost:8081/v1/traces
+  endpoint: https://app.tracekit.dev
   enable-code-monitoring: true
   local-ui-port: 9999
 

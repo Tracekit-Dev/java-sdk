@@ -1,6 +1,9 @@
 package dev.tracekit.example;
 
 import dev.tracekit.TracekitSDK;
+import dev.tracekit.metrics.Counter;
+import dev.tracekit.metrics.Gauge;
+import dev.tracekit.metrics.Histogram;
 import dev.tracekit.security.SensitiveDataDetector;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -20,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -40,6 +44,15 @@ public class DemoApplication {
     @Autowired
     private TracekitSDK tracekitSDK;
 
+    // Metrics
+    private Counter requestCounter;
+    private Gauge activeRequestsGauge;
+    private Histogram requestDurationHistogram;
+    private Counter paymentCounter;
+    private Histogram paymentAmountHistogram;
+
+    private final AtomicInteger activeRequests = new AtomicInteger(0);
+
     // Simulated user database
     private static final Map<String, User> USERS = new HashMap<>();
 
@@ -57,6 +70,18 @@ public class DemoApplication {
     public void setTracekitSDK(TracekitSDK sdk) {
         this.tracekitSDK = sdk;
         logger.info("TraceKit SDK injected");
+
+        // Initialize metrics
+        this.requestCounter = sdk.counter("http.requests.total",
+            Map.of("service", "demo-app"));
+        this.activeRequestsGauge = sdk.gauge("http.requests.active");
+        this.requestDurationHistogram = sdk.histogram("http.request.duration",
+            Map.of("unit", "ms"));
+        this.paymentCounter = sdk.counter("payments.total");
+        this.paymentAmountHistogram = sdk.histogram("payment.amount",
+            Map.of("currency", "usd"));
+
+        logger.info("Metrics initialized");
     }
 
     /**
@@ -64,20 +89,33 @@ public class DemoApplication {
      */
     @GetMapping("/")
     public Map<String, Object> welcome(HttpServletRequest request) {
-        logger.info("Welcome endpoint called");
+        long startTime = System.currentTimeMillis();
+        activeRequests.incrementAndGet();
+        activeRequestsGauge.set(activeRequests.get());
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("message", "Welcome to TraceKit Spring Boot Example!");
-        response.put("version", "1.0.0");
-        response.put("endpoints", new String[]{
-            "GET / - This welcome message",
-            "GET /users/{id} - Get user by ID (try 1, 2, or 3)",
-            "GET /error - Simulate an error for testing",
-            "POST /scan - Scan code for security issues",
-            "POST /process-payment - Process payment with snapshot capture"
-        });
+        try {
+            logger.info("Welcome endpoint called");
+            requestCounter.inc();
 
-        return response;
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "Welcome to TraceKit Spring Boot Example!");
+            response.put("version", "1.0.0");
+            response.put("endpoints", new String[]{
+                "GET / - This welcome message",
+                "GET /users/{id} - Get user by ID (try 1, 2, or 3)",
+                "GET /error - Simulate an error for testing",
+                "POST /scan - Scan code for security issues",
+                "POST /process-payment - Process payment with snapshot capture",
+                "GET /metrics - View current metrics"
+            });
+
+            return response;
+        } finally {
+            long duration = System.currentTimeMillis() - startTime;
+            requestDurationHistogram.record(duration);
+            activeRequests.decrementAndGet();
+            activeRequestsGauge.set(activeRequests.get());
+        }
     }
 
     /**
@@ -85,23 +123,35 @@ public class DemoApplication {
      */
     @GetMapping("/users/{id}")
     public ResponseEntity<?> getUser(@PathVariable String id, HttpServletRequest request) {
-        logger.info("Looking up user with ID: {}", id);
+        long startTime = System.currentTimeMillis();
+        activeRequests.incrementAndGet();
+        activeRequestsGauge.set(activeRequests.get());
 
-        // Simulate random processing delay
-        simulateProcessing();
+        try {
+            logger.info("Looking up user with ID: {}", id);
+            requestCounter.inc();
 
-        User user = USERS.get(id);
-        if (user == null) {
-            logger.warn("User not found: {}", id);
+            // Simulate random processing delay
+            simulateProcessing();
 
-            Map<String, String> error = new HashMap<>();
-            error.put("error", "User not found");
-            error.put("userId", id);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            User user = USERS.get(id);
+            if (user == null) {
+                logger.warn("User not found: {}", id);
+
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "User not found");
+                error.put("userId", id);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            }
+
+            logger.info("User found: {}", user.getName());
+            return ResponseEntity.ok(user);
+        } finally {
+            long duration = System.currentTimeMillis() - startTime;
+            requestDurationHistogram.record(duration);
+            activeRequests.decrementAndGet();
+            activeRequestsGauge.set(activeRequests.get());
         }
-
-        logger.info("User found: {}", user.getName());
-        return ResponseEntity.ok(user);
     }
 
     /**
@@ -172,35 +222,78 @@ public class DemoApplication {
      */
     @PostMapping("/process-payment")
     public ResponseEntity<Map<String, Object>> processPayment(@RequestBody Map<String, Object> request) {
-        logger.info("Payment processing endpoint called");
+        long startTime = System.currentTimeMillis();
+        activeRequests.incrementAndGet();
+        activeRequestsGauge.set(activeRequests.get());
 
-        String amount = String.valueOf(request.get("amount"));
-        String currency = String.valueOf(request.get("currency"));
+        try {
+            logger.info("Payment processing endpoint called");
+            requestCounter.inc();
 
-        String stripeApiKey = "sk_test_FakeKey123456789ABCDEFGHIJKL";
-        String customerId = "cus_123456789";
-        String cardNumber = "4532123456789012";
+            String amount = String.valueOf(request.get("amount"));
+            String currency = String.valueOf(request.get("currency"));
 
-        Map<String, Object> capturedVars = new HashMap<>();
-        capturedVars.put("amount", amount);
-        capturedVars.put("currency", currency);
-        capturedVars.put("stripeApiKey", stripeApiKey);
-        capturedVars.put("customerId", customerId);
-        capturedVars.put("cardNumber", cardNumber);
-        capturedVars.put("timestamp", System.currentTimeMillis());
+            // Track payment metrics
+            paymentCounter.inc();
+            try {
+                double amountValue = Double.parseDouble(amount);
+                paymentAmountHistogram.record(amountValue);
+            } catch (NumberFormatException e) {
+                logger.warn("Invalid amount format: {}", amount);
+            }
 
-        tracekitSDK.captureSnapshot("payment-processing", capturedVars);
+            String stripeApiKey = "sk_test_FakeKey123456789ABCDEFGHIJKL";
+            String customerId = "cus_123456789";
+            String cardNumber = "4532123456789012";
 
-        simulateProcessing();
+            Map<String, Object> capturedVars = new HashMap<>();
+            capturedVars.put("amount", amount);
+            capturedVars.put("currency", currency);
+            capturedVars.put("stripeApiKey", stripeApiKey);
+            capturedVars.put("customerId", customerId);
+            capturedVars.put("cardNumber", cardNumber);
+            capturedVars.put("timestamp", System.currentTimeMillis());
+
+            tracekitSDK.captureSnapshot("payment-processing", capturedVars);
+
+            simulateProcessing();
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("transaction_id", "txn_" + System.currentTimeMillis());
+            response.put("amount", amount);
+            response.put("currency", currency);
+            response.put("message", "Payment processed successfully");
+
+            logger.info("Payment processed successfully");
+
+            return ResponseEntity.ok(response);
+        } finally {
+            long duration = System.currentTimeMillis() - startTime;
+            requestDurationHistogram.record(duration);
+            activeRequests.decrementAndGet();
+            activeRequestsGauge.set(activeRequests.get());
+        }
+    }
+
+    /**
+     * Metrics endpoint - displays current metrics summary.
+     */
+    @GetMapping("/metrics")
+    public ResponseEntity<Map<String, Object>> getMetrics() {
+        logger.info("Metrics endpoint called");
 
         Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        response.put("transaction_id", "txn_" + System.currentTimeMillis());
-        response.put("amount", amount);
-        response.put("currency", currency);
-        response.put("message", "Payment processed successfully");
-
-        logger.info("Payment processed successfully");
+        response.put("message", "Metrics are being collected and sent to TraceKit");
+        response.put("active_requests", activeRequests.get());
+        response.put("metrics_tracked", Map.of(
+            "http.requests.total", "Counter - Total HTTP requests",
+            "http.requests.active", "Gauge - Currently active requests",
+            "http.request.duration", "Histogram - Request duration in ms",
+            "payments.total", "Counter - Total payments processed",
+            "payment.amount", "Histogram - Payment amounts in USD"
+        ));
+        response.put("note", "Metrics are flushed every 10 seconds or when 100 metrics are collected");
 
         return ResponseEntity.ok(response);
     }

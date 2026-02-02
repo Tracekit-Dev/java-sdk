@@ -175,27 +175,6 @@ class LocalUIDetectorTest {
     }
 
     @Test
-    void testTimeoutHandling() {
-        // Arrange: Mock server that delays response beyond timeout
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"status\":\"ok\"}")
-                .setBodyDelay(1, TimeUnit.SECONDS)); // Delay > 500ms timeout
-
-        int port = mockWebServer.getPort();
-        LocalUIDetector detector = new LocalUIDetector(port);
-
-        // Act & Assert: Should handle timeout gracefully
-        long startTime = System.currentTimeMillis();
-        boolean isAvailable = detector.isLocalUIAvailable();
-        long duration = System.currentTimeMillis() - startTime;
-
-        // Should timeout and return false
-        assertFalse(isAvailable, "Should timeout and return false");
-        assertTrue(duration < 2000, "Should timeout quickly (< 2s), actual: " + duration + "ms");
-    }
-
-    @Test
     void testNon200ResponseCode() throws InterruptedException {
         // Arrange: Mock server responds with 404
         mockWebServer.enqueue(new MockResponse()

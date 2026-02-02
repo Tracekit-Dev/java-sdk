@@ -2,6 +2,7 @@ package dev.tracekit;
 
 import dev.tracekit.local.LocalUIDetector;
 import dev.tracekit.snapshot.SnapshotClient;
+import dev.tracekit.metrics.*;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Tracer;
@@ -14,6 +15,7 @@ import io.opentelemetry.semconv.ResourceAttributes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -65,6 +67,7 @@ public final class TracekitSDK {
     private final OpenTelemetry openTelemetry;
     private final SdkTracerProvider tracerProvider;
     private final SnapshotClient snapshotClient;
+    private final MetricsRegistry metricsRegistry;
     private volatile boolean isShutdown = false;
 
     /**
@@ -100,11 +103,17 @@ public final class TracekitSDK {
         this.tracerProvider = createTracerProvider(config);
         this.openTelemetry = buildOpenTelemetry(tracerProvider, registerGlobal);
 
+        // Initialize metrics registry
+        boolean useSSL = !config.getEndpoint().startsWith("http://");
+        String metricsEndpoint = resolveEndpoint(config.getEndpoint(), "/v1/metrics", useSSL);
+        this.metricsRegistry = new MetricsRegistry(metricsEndpoint, config.getApiKey());
+
         // Initialize SnapshotClient if code monitoring is enabled
         if (config.isEnableCodeMonitoring()) {
+            String snapshotBaseUrl = resolveEndpoint(config.getEndpoint(), "", useSSL);
             this.snapshotClient = new SnapshotClient(
                 config.getApiKey(),
-                config.getEndpoint().replace("/v1/traces", ""),
+                snapshotBaseUrl,
                 config.getServiceName()
             );
             this.snapshotClient.start();
@@ -276,6 +285,11 @@ public final class TracekitSDK {
                     snapshotClient.stop();
                 }
 
+                // Shutdown metrics registry
+                if (metricsRegistry != null) {
+                    metricsRegistry.shutdown();
+                }
+
                 // Close the tracer provider (this will flush pending spans)
                 tracerProvider.close();
                 isShutdown = true;
@@ -284,6 +298,152 @@ public final class TracekitSDK {
                 logger.error("Error during SDK shutdown", e);
             }
         }
+    }
+
+    /**
+     * Get or create a counter metric.
+     *
+     * @param name the metric name
+     * @param tags the metric tags
+     * @return a Counter instance
+     */
+    public Counter counter(String name, Map<String, String> tags) {
+        return metricsRegistry.counter(name, tags);
+    }
+
+    /**
+     * Get or create a counter metric without tags.
+     *
+     * @param name the metric name
+     * @return a Counter instance
+     */
+    public Counter counter(String name) {
+        return metricsRegistry.counter(name, Collections.emptyMap());
+    }
+
+    /**
+     * Get or create a gauge metric.
+     *
+     * @param name the metric name
+     * @param tags the metric tags
+     * @return a Gauge instance
+     */
+    public Gauge gauge(String name, Map<String, String> tags) {
+        return metricsRegistry.gauge(name, tags);
+    }
+
+    /**
+     * Get or create a gauge metric without tags.
+     *
+     * @param name the metric name
+     * @return a Gauge instance
+     */
+    public Gauge gauge(String name) {
+        return metricsRegistry.gauge(name, Collections.emptyMap());
+    }
+
+    /**
+     * Get or create a histogram metric.
+     *
+     * @param name the metric name
+     * @param tags the metric tags
+     * @return a Histogram instance
+     */
+    public Histogram histogram(String name, Map<String, String> tags) {
+        return metricsRegistry.histogram(name, tags);
+    }
+
+    /**
+     * Get or create a histogram metric without tags.
+     *
+     * @param name the metric name
+     * @return a Histogram instance
+     */
+    public Histogram histogram(String name) {
+        return metricsRegistry.histogram(name, Collections.emptyMap());
+    }
+
+    /**
+     * Resolves endpoint URL from base endpoint and path.
+     * Handles various URL formats: just host, host with scheme, and full URLs.
+     *
+     * @param endpoint the base endpoint (can be host, host with scheme, or full URL)
+     * @param path the path to append (e.g., "/v1/traces", "/v1/metrics", or "")
+     * @param useSSL whether to use HTTPS (ignored if endpoint already has a scheme)
+     * @return the resolved endpoint URL
+     */
+    static String resolveEndpoint(String endpoint, String path, boolean useSSL) {
+        // If endpoint has a scheme (http:// or https://)
+        if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
+            // Remove trailing slash
+            endpoint = endpoint.replaceAll("/$", "");
+
+            // Check if endpoint has a path component (anything after the host)
+            String withoutScheme = endpoint.replaceAll("^https?://", "");
+
+            if (withoutScheme.contains("/")) {
+                // Endpoint has a path component
+                if (path.isEmpty()) {
+                    // For empty path (snapshots), extract base URL
+                    return extractBaseURL(endpoint);
+                }
+                // Otherwise use endpoint as-is
+                return endpoint;
+            }
+
+            // Just host with scheme, add the path
+            return endpoint + path;
+        }
+
+        // No scheme provided - build URL with scheme
+        String scheme = useSSL ? "https://" : "http://";
+        endpoint = endpoint.replaceAll("/$", ""); // Remove trailing slash
+        return scheme + endpoint + path;
+    }
+
+    /**
+     * Extracts base URL (scheme + host) from full URL, only if it contains
+     * known service-specific paths like /v1/traces or /v1/metrics.
+     * This prevents extracting base from custom base paths like /api or /custom.
+     *
+     * @param fullURL the full URL to extract base from
+     * @return the base URL (scheme + host + port) or the full URL if no service path found
+     */
+    static String extractBaseURL(String fullURL) {
+        // Check if URL contains known service-specific paths
+        boolean hasServicePath = fullURL.contains("/v1/traces") ||
+                fullURL.contains("/v1/metrics") ||
+                fullURL.contains("/api/v1/traces") ||
+                fullURL.contains("/api/v1/metrics");
+
+        // If it doesn't have a service-specific path, keep the URL as-is
+        if (!hasServicePath) {
+            return fullURL;
+        }
+
+        // Extract scheme
+        String scheme;
+        String remaining;
+
+        if (fullURL.startsWith("https://")) {
+            scheme = "https://";
+            remaining = fullURL.substring(8);
+        } else if (fullURL.startsWith("http://")) {
+            scheme = "http://";
+            remaining = fullURL.substring(7);
+        } else {
+            // No scheme, return as-is
+            return fullURL;
+        }
+
+        // Find first "/" to separate host from path
+        int idx = remaining.indexOf('/');
+        if (idx != -1) {
+            return scheme + remaining.substring(0, idx);
+        }
+
+        // No path component
+        return scheme + remaining;
     }
 
     /**

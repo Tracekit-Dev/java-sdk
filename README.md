@@ -8,12 +8,13 @@ Official Java/Kotlin SDK for TraceKit APM - OpenTelemetry-based distributed trac
 
 ## Overview
 
-TraceKit Java SDK provides production-ready distributed tracing capabilities for Java and Kotlin applications. Built on OpenTelemetry standards, it offers seamless integration with popular frameworks, automatic local development support, and comprehensive security scanning.
+TraceKit Java SDK provides production-ready distributed tracing and metrics capabilities for Java and Kotlin applications. Built on OpenTelemetry standards, it offers seamless integration with popular frameworks, automatic local development support, comprehensive security scanning, and a lightweight metrics API for tracking application performance.
 
 ## Features
 
 - **OpenTelemetry-Native**: Built on OpenTelemetry 1.32.0 for maximum compatibility and standardization
 - **Distributed Tracing**: Full support for distributed trace propagation across microservices
+- **Metrics API**: Lightweight metrics (Counter, Gauge, Histogram) with automatic OTLP export
 - **Security Scanning**: Automatic detection of sensitive data (PII, credentials, API keys) in traces
 - **Local UI Auto-Detection**: Automatically sends traces to local TraceKit UI when running in development
 - **Spring Boot Integration**: Zero-configuration auto-instrumentation via Spring Boot starter
@@ -32,7 +33,7 @@ For Spring Boot applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-spring-boot-starter</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -42,7 +43,7 @@ For vanilla Java applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-core</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -51,13 +52,13 @@ For vanilla Java applications:
 For Spring Boot applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-spring-boot-starter:1.1.0'
+implementation 'dev.tracekit:tracekit-spring-boot-starter:1.2.0'
 ```
 
 For vanilla Java applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-core:1.1.0'
+implementation 'dev.tracekit:tracekit-core:1.2.0'
 ```
 
 ## Quick Start
@@ -214,6 +215,166 @@ TraceKit automatically scans captured snapshots for sensitive information when c
 - **Security Flags**: Each detection creates a security flag with severity level (CRITICAL, HIGH, MEDIUM, LOW)
 
 Security scanning happens automatically for all `captureSnapshot()` calls - no additional configuration needed.
+
+## Metrics
+
+TraceKit SDK provides a lightweight metrics API for tracking application performance and business metrics. Metrics are automatically buffered and exported in OTLP format.
+
+### Metric Types
+
+- **Counter**: Monotonically increasing values (e.g., total requests, errors)
+- **Gauge**: Point-in-time values that can increase or decrease (e.g., active connections, memory usage)
+- **Histogram**: Distribution of values (e.g., request duration, payload sizes)
+
+### Spring Boot Usage
+
+```java
+import dev.tracekit.TracekitSDK;
+import dev.tracekit.metrics.Counter;
+import dev.tracekit.metrics.Gauge;
+import dev.tracekit.metrics.Histogram;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class ApiController {
+
+    @Autowired
+    private TracekitSDK tracekitSDK;
+
+    private Counter requestCounter;
+    private Gauge activeRequestsGauge;
+    private Histogram requestDurationHistogram;
+
+    @Autowired
+    public void setTracekitSDK(TracekitSDK sdk) {
+        this.tracekitSDK = sdk;
+
+        // Initialize metrics with optional tags
+        this.requestCounter = sdk.counter("http.requests.total",
+            Map.of("service", "api"));
+        this.activeRequestsGauge = sdk.gauge("http.requests.active");
+        this.requestDurationHistogram = sdk.histogram("http.request.duration",
+            Map.of("unit", "ms"));
+    }
+
+    @GetMapping("/api/users")
+    public List<User> getUsers() {
+        long startTime = System.currentTimeMillis();
+        activeRequestsGauge.inc();
+
+        try {
+            requestCounter.inc();
+
+            // Your business logic here
+            List<User> users = userService.findAll();
+
+            return users;
+        } finally {
+            long duration = System.currentTimeMillis() - startTime;
+            requestDurationHistogram.record(duration);
+            activeRequestsGauge.dec();
+        }
+    }
+}
+```
+
+### Vanilla Java Usage
+
+```java
+import dev.tracekit.TracekitSDK;
+import dev.tracekit.TracekitConfig;
+import dev.tracekit.metrics.Counter;
+import dev.tracekit.metrics.Histogram;
+
+public class Application {
+    public static void main(String[] args) {
+        TracekitConfig config = TracekitConfig.builder()
+            .apiKey(System.getenv("TRACEKIT_API_KEY"))
+            .serviceName("my-service")
+            .environment("production")
+            .build();
+
+        TracekitSDK sdk = TracekitSDK.create(config);
+
+        // Create metrics
+        Counter jobCounter = sdk.counter("jobs.processed");
+        Histogram jobDuration = sdk.histogram("job.duration",
+            Map.of("unit", "seconds"));
+
+        // Use metrics
+        jobCounter.inc();
+        jobDuration.record(3.5);
+
+        // Shutdown on application exit (flushes pending metrics)
+        Runtime.getRuntime().addShutdownHook(new Thread(sdk::shutdown));
+    }
+}
+```
+
+### Metric API Reference
+
+#### Counter
+
+```java
+Counter counter = sdk.counter("metric.name");
+Counter counterWithTags = sdk.counter("metric.name", Map.of("tag", "value"));
+
+counter.inc();          // Increment by 1
+counter.add(5.0);       // Add specific value
+```
+
+#### Gauge
+
+```java
+Gauge gauge = sdk.gauge("metric.name");
+Gauge gaugeWithTags = sdk.gauge("metric.name", Map.of("tag", "value"));
+
+gauge.set(42.0);        // Set to specific value
+gauge.inc();            // Increment by 1
+gauge.dec();            // Decrement by 1
+```
+
+#### Histogram
+
+```java
+Histogram histogram = sdk.histogram("metric.name");
+Histogram histogramWithTags = sdk.histogram("metric.name", Map.of("unit", "ms"));
+
+histogram.record(123.45);  // Record a value
+```
+
+### Common Use Cases
+
+**HTTP Request Metrics**:
+```java
+Counter httpRequests = sdk.counter("http.requests.total", Map.of("method", "GET"));
+Gauge activeConnections = sdk.gauge("http.connections.active");
+Histogram requestDuration = sdk.histogram("http.request.duration", Map.of("unit", "ms"));
+```
+
+**Database Metrics**:
+```java
+Counter queries = sdk.counter("db.queries.total", Map.of("database", "users"));
+Histogram queryDuration = sdk.histogram("db.query.duration", Map.of("unit", "ms"));
+Gauge connectionPoolSize = sdk.gauge("db.connections.active");
+```
+
+**Business Metrics**:
+```java
+Counter orders = sdk.counter("orders.total");
+Histogram orderValue = sdk.histogram("order.value", Map.of("currency", "usd"));
+Gauge inventory = sdk.gauge("inventory.items");
+```
+
+### Metric Export Behavior
+
+- **Buffering**: Metrics are buffered in memory (max 100 metrics or 10 seconds)
+- **Auto-Flush**: Automatically exports when buffer is full or on interval
+- **Format**: Exported in OTLP (OpenTelemetry Protocol) JSON format
+- **Endpoint**: Sent to `/v1/metrics` endpoint (derived from traces endpoint)
+- **Shutdown**: All pending metrics are flushed on SDK shutdown
 
 ## Local Development
 
