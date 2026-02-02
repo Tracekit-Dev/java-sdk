@@ -22,14 +22,14 @@ public final class MetricsBuffer {
     private final ScheduledExecutorService scheduler;
     private volatile boolean isShutdown = false;
 
-    public MetricsBuffer(String endpoint, String apiKey) {
-        this.exporter = new MetricsExporter(endpoint, apiKey);
+    public MetricsBuffer(String endpoint, String apiKey, String serviceName) {
+        this.exporter = new MetricsExporter(endpoint, apiKey, serviceName);
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "tracekit-metrics-flush");
             t.setDaemon(true);
             return t;
         });
-        logger.info("📊 MetricsBuffer created with endpoint: {}", endpoint);
+        logger.info("📊 MetricsBuffer created with endpoint: {} for service: {}", endpoint, serviceName);
     }
 
     public void start() {

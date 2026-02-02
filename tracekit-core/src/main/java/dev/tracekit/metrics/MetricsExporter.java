@@ -19,12 +19,14 @@ public final class MetricsExporter {
     private static final Logger logger = LoggerFactory.getLogger(MetricsExporter.class);
     private final String endpoint;
     private final String apiKey;
+    private final String serviceName;
     private final HttpClient httpClient;
     private final Gson gson;
 
-    public MetricsExporter(String endpoint, String apiKey) {
+    public MetricsExporter(String endpoint, String apiKey, String serviceName) {
         this.endpoint = endpoint;
         this.apiKey = apiKey;
+        this.serviceName = serviceName;
         this.httpClient = HttpClient.newBuilder()
             .connectTimeout(java.time.Duration.ofSeconds(10))
             .build();
@@ -92,7 +94,18 @@ public final class MetricsExporter {
         scopeMetric.put("scope", scope);
         scopeMetric.put("metrics", metrics);
 
+        // Add resource with service.name attribute
+        Map<String, Object> serviceNameAttr = new HashMap<>();
+        serviceNameAttr.put("key", "service.name");
+        Map<String, Object> serviceNameValue = new HashMap<>();
+        serviceNameValue.put("stringValue", serviceName);
+        serviceNameAttr.put("value", serviceNameValue);
+
+        Map<String, Object> resource = new HashMap<>();
+        resource.put("attributes", Collections.singletonList(serviceNameAttr));
+
         Map<String, Object> resourceMetric = new HashMap<>();
+        resourceMetric.put("resource", resource);
         resourceMetric.put("scopeMetrics", Collections.singletonList(scopeMetric));
 
         Map<String, Object> result = new HashMap<>();

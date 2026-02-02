@@ -106,7 +106,7 @@ public final class TracekitSDK {
         // Initialize metrics registry
         boolean useSSL = !config.getEndpoint().startsWith("http://");
         String metricsEndpoint = resolveEndpoint(config.getEndpoint(), "/v1/metrics", useSSL);
-        this.metricsRegistry = new MetricsRegistry(metricsEndpoint, config.getApiKey());
+        this.metricsRegistry = new MetricsRegistry(metricsEndpoint, config.getApiKey(), config.getServiceName());
 
         // Initialize SnapshotClient if code monitoring is enabled
         if (config.isEnableCodeMonitoring()) {

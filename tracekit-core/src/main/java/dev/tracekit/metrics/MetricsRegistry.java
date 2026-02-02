@@ -14,8 +14,8 @@ public final class MetricsRegistry {
     private final Map<String, HistogramImpl> histograms = new ConcurrentHashMap<>();
     private final MetricsBuffer buffer;
 
-    public MetricsRegistry(String endpoint, String apiKey) {
-        this.buffer = new MetricsBuffer(endpoint, apiKey);
+    public MetricsRegistry(String endpoint, String apiKey, String serviceName) {
+        this.buffer = new MetricsBuffer(endpoint, apiKey, serviceName);
         this.buffer.start();
     }
 
