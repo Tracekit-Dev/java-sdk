@@ -63,13 +63,13 @@ public class UrlResolutionTest {
     @Test
     public void testFullUrlWithCustomPath() {
         String result = TracekitSDK.resolveEndpoint("http://localhost:8081/custom/path", "/v1/traces", true);
-        assertEquals("http://localhost:8081/custom/path", result);
+        assertEquals("http://localhost:8081/v1/traces", result);
     }
 
     @Test
     public void testFullUrlWithTrailingSlash() {
         String result = TracekitSDK.resolveEndpoint("https://app.tracekit.dev/api/v2/", "/v1/traces", false);
-        assertEquals("https://app.tracekit.dev/api/v2", result);
+        assertEquals("https://app.tracekit.dev/v1/traces", result);
     }
 
     // Edge cases
@@ -123,15 +123,15 @@ public class UrlResolutionTest {
     }
 
     @Test
-    public void testKeepCustomPathUrlsAsIs() {
+    public void testExtractBaseFromCustomPath() {
         String result = TracekitSDK.extractBaseURL("http://localhost:8081/custom");
-        assertEquals("http://localhost:8081/custom", result);
+        assertEquals("http://localhost:8081", result);
     }
 
     @Test
-    public void testKeepCustomBasePathUrlsAsIs() {
+    public void testExtractBaseFromApiPath() {
         String result = TracekitSDK.extractBaseURL("http://localhost:8081/api");
-        assertEquals("http://localhost:8081/api", result);
+        assertEquals("http://localhost:8081", result);
     }
 
     @Test
@@ -212,9 +212,9 @@ public class UrlResolutionTest {
                         "/v1/traces",
                         "/v1/metrics",
                         true, // Should be ignored
-                        "http://localhost:8081/custom",
-                        "http://localhost:8081/custom",
-                        "http://localhost:8081/custom"
+                        "http://localhost:8081/v1/traces",
+                        "http://localhost:8081/v1/metrics",
+                        "http://localhost:8081"
                 ),
                 Arguments.of(
                         "trailing slash handling",
@@ -233,7 +233,7 @@ public class UrlResolutionTest {
                         "/v1/metrics",
                         true, // Should be ignored
                         "http://localhost:8081/v1/traces",
-                        "http://localhost:8081/v1/traces",
+                        "http://localhost:8081/v1/metrics",
                         "http://localhost:8081" // Should extract base URL
                 )
         );

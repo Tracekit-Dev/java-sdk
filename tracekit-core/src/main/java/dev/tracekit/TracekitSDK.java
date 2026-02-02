@@ -382,13 +382,12 @@ public final class TracekitSDK {
             String withoutScheme = endpoint.replaceAll("^https?://", "");
 
             if (withoutScheme.contains("/")) {
-                // Endpoint has a path component
+                // Endpoint has a path component - always extract base and append correct path
+                String base = extractBaseURL(endpoint);
                 if (path.isEmpty()) {
-                    // For empty path (snapshots), extract base URL
-                    return extractBaseURL(endpoint);
+                    return base;
                 }
-                // Otherwise use endpoint as-is
-                return endpoint;
+                return base + path;
             }
 
             // Just host with scheme, add the path
@@ -402,25 +401,13 @@ public final class TracekitSDK {
     }
 
     /**
-     * Extracts base URL (scheme + host) from full URL, only if it contains
-     * known service-specific paths like /v1/traces or /v1/metrics.
-     * This prevents extracting base from custom base paths like /api or /custom.
+     * Extracts base URL (scheme + host + port) from full URL.
+     * Always strips any path component, regardless of what it is.
      *
      * @param fullURL the full URL to extract base from
-     * @return the base URL (scheme + host + port) or the full URL if no service path found
+     * @return the base URL (scheme + host + port)
      */
     static String extractBaseURL(String fullURL) {
-        // Check if URL contains known service-specific paths
-        boolean hasServicePath = fullURL.contains("/v1/traces") ||
-                fullURL.contains("/v1/metrics") ||
-                fullURL.contains("/api/v1/traces") ||
-                fullURL.contains("/api/v1/metrics");
-
-        // If it doesn't have a service-specific path, keep the URL as-is
-        if (!hasServicePath) {
-            return fullURL;
-        }
-
         // Extract scheme
         String scheme;
         String remaining;

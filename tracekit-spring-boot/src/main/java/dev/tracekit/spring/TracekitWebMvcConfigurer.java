@@ -40,6 +40,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @ConditionalOnClass({TracekitSDK.class, WebMvcConfigurer.class})
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnProperty(prefix = "tracekit", name = "auto-instrument", havingValue = "true", matchIfMissing = true)
+@org.springframework.boot.autoconfigure.condition.ConditionalOnBean(TracekitSDK.class)
 public class TracekitWebMvcConfigurer implements WebMvcConfigurer {
 
     private static final Logger logger = LoggerFactory.getLogger(TracekitWebMvcConfigurer.class);
