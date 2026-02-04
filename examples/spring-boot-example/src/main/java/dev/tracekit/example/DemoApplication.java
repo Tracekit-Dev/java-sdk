@@ -44,6 +44,9 @@ public class DemoApplication {
     @Autowired
     private TracekitSDK tracekitSDK;
 
+    @Autowired
+    private UserRepository userRepository;
+
     // Metrics
     private Counter requestCounter;
     private Gauge activeRequestsGauge;
@@ -52,15 +55,6 @@ public class DemoApplication {
     private Histogram paymentAmountHistogram;
 
     private final AtomicInteger activeRequests = new AtomicInteger(0);
-
-    // Simulated user database
-    private static final Map<String, User> USERS = new HashMap<>();
-
-    static {
-        USERS.put("1", new User("1", "Alice Johnson", "alice@example.com"));
-        USERS.put("2", new User("2", "Bob Smith", "bob@example.com"));
-        USERS.put("3", new User("3", "Charlie Brown", "charlie@example.com"));
-    }
 
     public static void main(String[] args) {
         SpringApplication.run(DemoApplication.class, args);
@@ -100,9 +94,16 @@ public class DemoApplication {
             Map<String, Object> response = new HashMap<>();
             response.put("message", "Welcome to TraceKit Spring Boot Example!");
             response.put("version", "1.0.0");
+            response.put("features", new String[]{
+                "Automatic HTTP request tracing",
+                "Automatic JDBC query tracing (PostgreSQL)",
+                "Error tracking and monitoring",
+                "Distributed tracing with OpenTelemetry",
+                "Zero-code instrumentation via auto-configuration"
+            });
             response.put("endpoints", new String[]{
                 "GET / - This welcome message",
-                "GET /users/{id} - Get user by ID (try 1, 2, or 3)",
+                "GET /users/{id} - Get user by ID from database (automatic JDBC tracing)",
                 "GET /error - Simulate an error for testing",
                 "POST /scan - Scan code for security issues",
                 "POST /process-payment - Process payment with snapshot capture",
@@ -119,7 +120,8 @@ public class DemoApplication {
     }
 
     /**
-     * User lookup endpoint - demonstrates automatic tracing with parameters and conditional logic.
+     * User lookup endpoint - demonstrates automatic JDBC tracing via auto-instrumentation.
+     * Database queries are automatically traced without any manual instrumentation code.
      */
     @GetMapping("/users/{id}")
     public ResponseEntity<?> getUser(@PathVariable String id, HttpServletRequest request) {
@@ -134,8 +136,21 @@ public class DemoApplication {
             // Simulate random processing delay
             simulateProcessing();
 
-            User user = USERS.get(id);
-            if (user == null) {
+            // This query will be automatically traced by OpenTelemetry JDBC instrumentation
+            // You'll see a span for the SQL SELECT statement in the trace
+            Long userId;
+            try {
+                userId = Long.parseLong(id);
+            } catch (NumberFormatException e) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Invalid user ID format");
+                error.put("userId", id);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+            }
+
+            java.util.Optional<User> userOptional = userRepository.findById(userId);
+
+            if (userOptional.isEmpty()) {
                 logger.warn("User not found: {}", id);
 
                 Map<String, String> error = new HashMap<>();
@@ -144,6 +159,7 @@ public class DemoApplication {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
             }
 
+            User user = userOptional.get();
             logger.info("User found: {}", user.getName());
             return ResponseEntity.ok(user);
         } finally {
@@ -309,45 +325,6 @@ public class DemoApplication {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.warn("Processing simulation interrupted", e);
-        }
-    }
-
-    /**
-     * Simple User model for demonstration.
-     */
-    public static class User {
-        private String id;
-        private String name;
-        private String email;
-
-        public User(String id, String name, String email) {
-            this.id = id;
-            this.name = name;
-            this.email = email;
-        }
-
-        public String getId() {
-            return id;
-        }
-
-        public void setId(String id) {
-            this.id = id;
-        }
-
-        public String getName() {
-            return name;
-        }
-
-        public void setName(String name) {
-            this.name = name;
-        }
-
-        public String getEmail() {
-            return email;
-        }
-
-        public void setEmail(String email) {
-            this.email = email;
         }
     }
 }

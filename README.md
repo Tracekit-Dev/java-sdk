@@ -14,11 +14,12 @@ TraceKit Java SDK provides production-ready distributed tracing and metrics capa
 
 - **OpenTelemetry-Native**: Built on OpenTelemetry 1.32.0 for maximum compatibility and standardization
 - **Distributed Tracing**: Full support for distributed trace propagation across microservices
+- **Auto-Instrumentation**: Automatic tracing for Spring MVC, JDBC (PostgreSQL, MySQL, H2), HTTP clients, and Kafka
 - **Metrics API**: Lightweight metrics (Counter, Gauge, Histogram) with automatic OTLP export
 - **Security Scanning**: Automatic detection of sensitive data (PII, credentials, API keys) in traces
 - **Local UI Auto-Detection**: Automatically sends traces to local TraceKit UI when running in development
 - **Spring Boot Integration**: Zero-configuration auto-instrumentation via Spring Boot starter
-- **Framework Support**: HTTP requests, REST controllers, and JVM metrics automatically captured
+- **Database Tracing**: Automatic SQL query instrumentation for JDBC-compliant databases
 - **Client IP Capture**: Automatic IP detection for DDoS & traffic analysis
 - **Flexible Configuration**: Environment variables, properties files, or programmatic configuration
 - **Production-Ready**: Comprehensive error handling, resource management, and graceful shutdown
@@ -33,7 +34,7 @@ For Spring Boot applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-spring-boot-starter</artifactId>
-    <version>1.2.2</version>
+    <version>1.3.0</version>
 </dependency>
 ```
 
@@ -43,7 +44,7 @@ For vanilla Java applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-core</artifactId>
-    <version>1.2.2</version>
+    <version>1.3.0</version>
 </dependency>
 ```
 
@@ -52,13 +53,13 @@ For vanilla Java applications:
 For Spring Boot applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-spring-boot-starter:1.2.2'
+implementation 'dev.tracekit:tracekit-spring-boot-starter:1.3.0'
 ```
 
 For vanilla Java applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-core:1.2.2'
+implementation 'dev.tracekit:tracekit-core:1.3.0'
 ```
 
 ## Quick Start
@@ -167,6 +168,47 @@ fun main() {
 | `tracekit-kotlin` | Kotlin extensions and DSL support | Planned |
 | `tracekit-micronaut` | Micronaut framework integration | Planned |
 | `tracekit-quarkus` | Quarkus framework integration | Planned |
+
+## Auto-Instrumentation
+
+The Java SDK automatically instruments the following components when using the Spring Boot starter:
+
+### Web Frameworks
+- **Spring MVC** - REST controllers, request/response handling (Server spans)
+- **Spring WebFlux** - Reactive web applications
+- **Spring Web** - HTTP requests and responses
+
+### Databases
+- **JDBC** - Automatic SQL query tracing for all JDBC-compliant databases:
+  - PostgreSQL
+  - MySQL
+  - H2
+  - Oracle
+  - SQL Server
+  - Any JDBC driver
+
+### HTTP Clients
+- **OkHttp** - HTTP client requests with trace propagation
+- **RestTemplate** - Spring's synchronous HTTP client
+- **WebClient** - Spring's reactive HTTP client
+
+### Messaging
+- **Kafka** - Producer and consumer instrumentation
+- **Spring Kafka** - Spring's Kafka integration
+
+### Example Span Hierarchy
+
+A typical Spring Boot request with database access produces:
+
+```
+GET /users/1 (kind: Server)          - HTTP request
+  ├─ UserController#getUser          - Controller method
+  ├─ UserRepository.findById         - JPA/Hibernate query
+  │   └─ SELECT * FROM users...      - JDBC query (kind: Client)
+  └─ Response serialization
+```
+
+All instrumentation happens automatically - no code changes required!
 
 ## Framework Support
 

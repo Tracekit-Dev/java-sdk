@@ -1,6 +1,18 @@
 spring:
   application:
     name: tracekit-demo-app
+  datasource:
+    url: jdbc:postgresql://localhost:5437/ruby_test_app
+    username: contextio
+    password: contextio_dev_password
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
 
 server:
   port: 8080

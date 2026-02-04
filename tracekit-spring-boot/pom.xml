@@ -7,7 +7,7 @@
     <parent>
         <groupId>dev.tracekit</groupId>
         <artifactId>tracekit-java-sdk-parent</artifactId>
-        <version>1.2.2</version>
+        <version>1.3.0</version>
     </parent>
 
     <artifactId>tracekit-spring-boot-starter</artifactId>
@@ -42,6 +42,24 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
             <optional>true</optional>
+        </dependency>
+
+        <!-- OpenTelemetry Auto-Instrumentation -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- Database Instrumentation -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-jdbc</artifactId>
+        </dependency>
+
+        <!-- HTTP Client Instrumentation -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-okhttp-3.0</artifactId>
         </dependency>
 
         <!-- Configuration Processor (Optional) -->
