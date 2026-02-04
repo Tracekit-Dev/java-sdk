@@ -85,20 +85,20 @@ public class SnapshotClient {
             return;
         }
 
-        String fileName = caller.getFileName();
+        String filePath = getFullFilePath(caller);
         int lineNumber = caller.getLineNumber();
         String functionName = caller.getClassName() + "." + caller.getMethodName();
 
-        logger.debug("🔍 Caller detected: file={}, line={}, function={}", fileName, lineNumber, functionName);
+        logger.debug("🔍 Caller detected: file={}, line={}, function={}", filePath, lineNumber, functionName);
 
-        autoRegisterBreakpoint(fileName, lineNumber, functionName, label);
+        autoRegisterBreakpoint(filePath, lineNumber, functionName, label);
 
         String locationKey = functionName + ":" + label;
         logger.debug("🔍 Looking up breakpoint with label key: {}", locationKey);
         BreakpointConfig breakpoint = breakpointsCache.get(locationKey);
 
         if (breakpoint == null) {
-            String lineKey = fileName + ":" + lineNumber;
+            String lineKey = filePath + ":" + lineNumber;
             logger.debug("🔍 Label key not found, trying line key: {}", lineKey);
             breakpoint = breakpointsCache.get(lineKey);
             logger.debug("Breakpoint not found by label key {}, trying line key {}: {}", locationKey, lineKey, breakpoint != null ? "found" : "not found");
@@ -107,7 +107,7 @@ public class SnapshotClient {
         }
 
         if (breakpoint == null) {
-            logger.debug("No breakpoint found in cache for {} or {}, skipping capture (cache size: {})", locationKey, fileName + ":" + lineNumber, breakpointsCache.size());
+            logger.debug("No breakpoint found in cache for {} or {}, skipping capture (cache size: {})", locationKey, filePath + ":" + lineNumber, breakpointsCache.size());
             logger.debug("🔍 Cache keys: {}", breakpointsCache.keySet());
             return;
         }
@@ -145,7 +145,7 @@ public class SnapshotClient {
         Snapshot snapshot = new Snapshot(
             breakpoint.id,
             serviceName,
-            fileName,
+            filePath,
             functionName,
             label,
             lineNumber,
@@ -176,6 +176,27 @@ public class SnapshotClient {
             return stackTrace[4];
         }
         return null;
+    }
+
+    private String getFullFilePath(StackTraceElement caller) {
+        String className = caller.getClassName();
+        String fileName = caller.getFileName();
+
+        if (fileName == null) {
+            // Fallback: use class name if filename is not available
+            return className.replace('.', '/') + ".java";
+        }
+
+        // Convert package name to path: com.example.MyClass -> com/example/MyClass.java
+        // Extract package path from class name
+        int lastDot = className.lastIndexOf('.');
+        if (lastDot > 0) {
+            String packagePath = className.substring(0, lastDot).replace('.', '/');
+            return packagePath + "/" + fileName;
+        }
+
+        // No package, just return filename
+        return fileName;
     }
 
     private void fetchActiveBreakpoints() {
