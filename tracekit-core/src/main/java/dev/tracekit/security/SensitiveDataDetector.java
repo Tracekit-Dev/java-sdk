@@ -1,17 +1,240 @@
 package dev.tracekit.security;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Detects and redacts sensitive data in code.
- * Scans for API keys, passwords, JWT tokens, credit cards, and other secrets.
+ * Detects and redacts sensitive data in snapshot variables and code.
+ * Uses typed [REDACTED:type] markers for 13+ PII/credential patterns.
+ * PII scrubbing is enabled by default and can be toggled via setScrubbing().
  */
 public class SensitiveDataDetector {
 
-    // Pre-compiled patterns for efficiency
+    /**
+     * Represents a PII pattern with its typed redaction marker.
+     */
+    public static class PIIPattern {
+        private final Pattern pattern;
+        private final String marker;
+
+        public PIIPattern(Pattern pattern, String marker) {
+            this.pattern = pattern;
+            this.marker = marker;
+        }
+
+        public Pattern getPattern() { return pattern; }
+        public String getMarker() { return marker; }
+    }
+
+    // Pre-compiled built-in patterns (13 standard patterns)
+    private static final List<PIIPattern> BUILT_IN_PATTERNS = new ArrayList<>();
+
+    static {
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("\\b[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}\\b"),
+                "[REDACTED:email]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("\\b\\d{3}-\\d{2}-\\d{4}\\b"),
+                "[REDACTED:ssn]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b"),
+                "[REDACTED:credit_card]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("\\b\\d{3}[-.  ]?\\d{3}[-.]?\\d{4}\\b"),
+                "[REDACTED:phone]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("AKIA[0-9A-Z]{16}"),
+                "[REDACTED:aws_key]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("(?i)aws.{0,20}secret.{0,20}[A-Za-z0-9/+=]{40}"),
+                "[REDACTED:aws_secret]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("(?i)(?:bearer\\s+)[A-Za-z0-9._~+/=\\-]{20,}"),
+                "[REDACTED:oauth_token]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("sk_live_[0-9a-zA-Z]{10,}"),
+                "[REDACTED:stripe_key]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("(?i)(?:password|passwd|pwd)\\s*[=:]\\s*[\"']?[^\\s\"']{6,}"),
+                "[REDACTED:password]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("eyJ[A-Za-z0-9_\\-]+\\.eyJ[A-Za-z0-9_\\-]+\\.[A-Za-z0-9_\\-]+"),
+                "[REDACTED:jwt]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("-----BEGIN (?:RSA |EC )?PRIVATE KEY-----"),
+                "[REDACTED:private_key]"));
+        BUILT_IN_PATTERNS.add(new PIIPattern(
+                Pattern.compile("(?i)(?:api[_\\-]?key|apikey)\\s*[:=]\\s*[\"']?[A-Za-z0-9_\\-]{20,}"),
+                "[REDACTED:api_key]"));
+    }
+
+    // Letter-boundary pattern -- \b treats _ as word char, so api_key/user_token won't match
+    private static final Pattern SENSITIVE_NAME_PATTERN =
+            Pattern.compile("(?i)(?:^|[^a-zA-Z])(password|passwd|pwd|secret|token|key|credential|api_key|apikey)(?:[^a-zA-Z]|$)");
+
+    private boolean scrubbingEnabled = true;
+    private final List<PIIPattern> allPatterns;
+
+    /**
+     * Creates a detector with the standard 13 built-in patterns.
+     */
+    public SensitiveDataDetector() {
+        this.allPatterns = new ArrayList<>(BUILT_IN_PATTERNS);
+    }
+
+    /**
+     * Creates a detector with custom patterns appended to the built-in set.
+     */
+    public SensitiveDataDetector(List<PIIPattern> customPatterns) {
+        this.allPatterns = new ArrayList<>(BUILT_IN_PATTERNS);
+        if (customPatterns != null) {
+            this.allPatterns.addAll(customPatterns);
+        }
+    }
+
+    /**
+     * Enable or disable PII scrubbing. Enabled by default.
+     */
+    public void setScrubbing(boolean enabled) {
+        this.scrubbingEnabled = enabled;
+    }
+
+    /**
+     * Returns whether PII scrubbing is currently enabled.
+     */
+    public boolean isScrubbingEnabled() {
+        return scrubbingEnabled;
+    }
+
+    /**
+     * Represents a security finding in snapshot variables.
+     */
+    public static class SecurityFlag {
+        private final String type;
+        private final String severity;
+        private final String variable;
+        private final boolean redacted;
+
+        public SecurityFlag(String type, String severity, String variable, boolean redacted) {
+            this.type = type;
+            this.severity = severity;
+            this.variable = variable;
+            this.redacted = redacted;
+        }
+
+        public String getType() { return type; }
+        public String getSeverity() { return severity; }
+        public String getVariable() { return variable; }
+        public boolean isRedacted() { return redacted; }
+    }
+
+    /**
+     * Result of scanning snapshot variables.
+     */
+    public static class ScanResult {
+        private final Map<String, Object> sanitizedVariables;
+        private final List<SecurityFlag> securityFlags;
+
+        public ScanResult(Map<String, Object> sanitizedVariables, List<SecurityFlag> securityFlags) {
+            this.sanitizedVariables = sanitizedVariables;
+            this.securityFlags = securityFlags;
+        }
+
+        public Map<String, Object> getSanitizedVariables() { return sanitizedVariables; }
+        public List<SecurityFlag> getSecurityFlags() { return securityFlags; }
+    }
+
+    /**
+     * Scans snapshot variables for sensitive data and returns sanitized variables
+     * with typed [REDACTED:type] markers. Scans serialized (stringified) values
+     * to catch nested PII.
+     *
+     * @param variables The snapshot variables to scan
+     * @return ScanResult with sanitized variables and security flags
+     */
+    public ScanResult scanVariables(Map<String, Object> variables) {
+        if (variables == null || variables.isEmpty()) {
+            return new ScanResult(new HashMap<>(), new ArrayList<>());
+        }
+
+        // If scrubbing is disabled, return as-is
+        if (!scrubbingEnabled) {
+            return new ScanResult(new HashMap<>(variables), new ArrayList<>());
+        }
+
+        Map<String, Object> sanitized = new HashMap<>();
+        List<SecurityFlag> flags = new ArrayList<>();
+
+        for (Map.Entry<String, Object> entry : variables.entrySet()) {
+            String name = entry.getKey();
+            Object value = entry.getValue();
+
+            // Check variable name for sensitive keywords (word-boundary matching)
+            if (SENSITIVE_NAME_PATTERN.matcher(name).find()) {
+                flags.add(new SecurityFlag("sensitive_variable_name", "medium", name, true));
+                sanitized.put(name, "[REDACTED:sensitive_name]");
+                continue;
+            }
+
+            // Serialize value to string for deep scanning
+            String serialized = String.valueOf(value);
+
+            boolean flagged = false;
+            for (PIIPattern pp : allPatterns) {
+                if (pp.getPattern().matcher(serialized).find()) {
+                    flags.add(new SecurityFlag("sensitive_data", "high", name, true));
+                    sanitized.put(name, pp.getMarker());
+                    flagged = true;
+                    break;
+                }
+            }
+
+            if (!flagged) {
+                sanitized.put(name, value);
+            }
+        }
+
+        return new ScanResult(sanitized, flags);
+    }
+
+    // ---- Legacy code-scanning API (kept for backward compatibility) ----
+
+    /**
+     * Represents a security finding in code (legacy API)
+     */
+    public static class Finding {
+        private final String type;
+        private final int line;
+        private final int column;
+        private final String severity;
+        private final String message;
+
+        public Finding(String type, int line, int column, String severity, String message) {
+            this.type = type;
+            this.line = line;
+            this.column = column;
+            this.severity = severity;
+            this.message = message;
+        }
+
+        public String getType() { return type; }
+        public int getLine() { return line; }
+        public int getColumn() { return column; }
+        public String getSeverity() { return severity; }
+        public String getMessage() { return message; }
+
+        @Override
+        public String toString() {
+            return String.format("[%s] %s at line %d, column %d: %s",
+                    severity.toUpperCase(), type, line, column, message);
+        }
+    }
+
+    // Legacy patterns used by scan()/redact()
     private static final Pattern AWS_ACCESS_KEY = Pattern.compile("\\bAKIA[0-9A-Z]{16}\\b");
     private static final Pattern STRIPE_SECRET_KEY = Pattern.compile("\\bsk_live_[0-9a-zA-Z]{10,}");
     private static final Pattern STRIPE_PUBLISHABLE_KEY = Pattern.compile("\\bpk_live_[0-9a-zA-Z]{10,}");
@@ -30,55 +253,7 @@ public class SensitiveDataDetector {
     private static final Pattern CREDIT_CARD = Pattern.compile("\\b([0-9]{13,19})\\b");
 
     /**
-     * Represents a security finding in code
-     */
-    public static class Finding {
-        private final String type;
-        private final int line;
-        private final int column;
-        private final String severity;
-        private final String message;
-
-        public Finding(String type, int line, int column, String severity, String message) {
-            this.type = type;
-            this.line = line;
-            this.column = column;
-            this.severity = severity;
-            this.message = message;
-        }
-
-        public String getType() {
-            return type;
-        }
-
-        public int getLine() {
-            return line;
-        }
-
-        public int getColumn() {
-            return column;
-        }
-
-        public String getSeverity() {
-            return severity;
-        }
-
-        public String getMessage() {
-            return message;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("[%s] %s at line %d, column %d: %s",
-                    severity.toUpperCase(), type, line, column, message);
-        }
-    }
-
-    /**
-     * Scans code for sensitive data
-     *
-     * @param code The code to scan
-     * @return List of findings
+     * Scans code for sensitive data (legacy API)
      */
     public List<Finding> scan(String code) {
         if (code == null || code.isEmpty()) {
@@ -92,74 +267,43 @@ public class SensitiveDataDetector {
             int lineNumber = i + 1;
             String line = lines[i];
 
-            // Check AWS access keys
             findPattern(line, lineNumber, AWS_ACCESS_KEY, findings,
                     "AWS_ACCESS_KEY", "critical",
-                    "AWS Access Key detected - should be stored in environment variables or secrets manager");
-
-            // Check Stripe secret keys
+                    "AWS Access Key detected");
             findPattern(line, lineNumber, STRIPE_SECRET_KEY, findings,
                     "STRIPE_SECRET_KEY", "critical",
-                    "Stripe Secret Key detected - must never be committed to code");
-
-            // Check Stripe publishable keys
+                    "Stripe Secret Key detected");
             findPattern(line, lineNumber, STRIPE_PUBLISHABLE_KEY, findings,
                     "STRIPE_PUBLISHABLE_KEY", "high",
-                    "Stripe Publishable Key detected - should be stored securely");
+                    "Stripe Publishable Key detected");
 
-            // Check generic API keys
             Matcher apiKeyMatcher = GENERIC_API_KEY.matcher(line);
             if (apiKeyMatcher.find()) {
-                findings.add(new Finding(
-                        "API_KEY",
-                        lineNumber,
-                        apiKeyMatcher.start(),
-                        "high",
-                        "API Key detected - should be stored in environment variables"
-                ));
+                findings.add(new Finding("API_KEY", lineNumber, apiKeyMatcher.start(), "high",
+                        "API Key detected"));
             }
 
-            // Check passwords
             Matcher passwordMatcher = PASSWORD.matcher(line);
             if (passwordMatcher.find()) {
-                findings.add(new Finding(
-                        "PASSWORD",
-                        lineNumber,
-                        passwordMatcher.start(),
-                        "critical",
-                        "Hardcoded password detected - must be removed and stored securely"
-                ));
+                findings.add(new Finding("PASSWORD", lineNumber, passwordMatcher.start(), "critical",
+                        "Hardcoded password detected"));
             }
 
-            // Check password methods
             Matcher passwordMethodMatcher = PASSWORD_METHOD.matcher(line);
             if (passwordMethodMatcher.find()) {
-                findings.add(new Finding(
-                        "PASSWORD",
-                        lineNumber,
-                        passwordMethodMatcher.start(),
-                        "critical",
-                        "Hardcoded password in method call - must be removed"
-                ));
+                findings.add(new Finding("PASSWORD", lineNumber, passwordMethodMatcher.start(), "critical",
+                        "Hardcoded password in method call"));
             }
 
-            // Check JWT tokens
             findPattern(line, lineNumber, JWT_TOKEN, findings,
-                    "JWT_TOKEN", "high",
-                    "JWT token detected - should not be hardcoded in source code");
+                    "JWT_TOKEN", "high", "JWT token detected");
 
-            // Check credit cards (with Luhn validation)
             Matcher cardMatcher = CREDIT_CARD.matcher(line);
             while (cardMatcher.find()) {
                 String cardNumber = cardMatcher.group(1);
                 if (isValidCreditCard(cardNumber)) {
-                    findings.add(new Finding(
-                            "CREDIT_CARD",
-                            lineNumber,
-                            cardMatcher.start(),
-                            "critical",
-                            "Valid credit card number detected - must be removed immediately"
-                    ));
+                    findings.add(new Finding("CREDIT_CARD", lineNumber, cardMatcher.start(), "critical",
+                            "Valid credit card number detected"));
                 }
             }
         }
@@ -168,10 +312,7 @@ public class SensitiveDataDetector {
     }
 
     /**
-     * Redacts sensitive data in code
-     *
-     * @param code The code to redact
-     * @return Code with sensitive data redacted
+     * Redacts sensitive data in code using typed [REDACTED:type] markers.
      */
     public String redact(String code) {
         if (code == null || code.isEmpty()) {
@@ -180,54 +321,15 @@ public class SensitiveDataDetector {
 
         String redacted = code;
 
-        // Redact AWS keys (keep first 8 chars)
-        redacted = redactPattern(redacted, AWS_ACCESS_KEY, 8);
-
-        // Redact Stripe secret keys (keep prefix)
-        redacted = redactPattern(redacted, STRIPE_SECRET_KEY, 8);
-
-        // Redact Stripe publishable keys (keep prefix)
-        redacted = redactPattern(redacted, STRIPE_PUBLISHABLE_KEY, 8);
-
-        // Redact generic API keys (keep nothing from value)
-        Matcher apiKeyMatcher = GENERIC_API_KEY.matcher(redacted);
-        StringBuffer sb = new StringBuffer();
-        while (apiKeyMatcher.find()) {
-            String replacement = apiKeyMatcher.group(1) + " = \"***\"";
-            apiKeyMatcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        // Apply all built-in patterns with typed markers
+        for (PIIPattern pp : BUILT_IN_PATTERNS) {
+            Matcher matcher = pp.getPattern().matcher(redacted);
+            redacted = matcher.replaceAll(Matcher.quoteReplacement(pp.getMarker()));
         }
-        apiKeyMatcher.appendTail(sb);
-        redacted = sb.toString();
-
-        // Redact passwords
-        redacted = redactPasswordPattern(redacted, PASSWORD);
-        redacted = redactPasswordPattern(redacted, PASSWORD_METHOD);
-
-        // Redact JWT tokens (keep first 3 chars - "eyJ")
-        redacted = redactPattern(redacted, JWT_TOKEN, 3);
-
-        // Redact credit cards (keep last 4 digits)
-        Matcher cardMatcher = CREDIT_CARD.matcher(redacted);
-        sb = new StringBuffer();
-        while (cardMatcher.find()) {
-            String cardNumber = cardMatcher.group(1);
-            if (isValidCreditCard(cardNumber)) {
-                String last4 = cardNumber.substring(cardNumber.length() - 4);
-                String replacement = "****" + last4;
-                cardMatcher.appendReplacement(sb, replacement);
-            } else {
-                cardMatcher.appendReplacement(sb, cardMatcher.group(0));
-            }
-        }
-        cardMatcher.appendTail(sb);
-        redacted = sb.toString();
 
         return redacted;
     }
 
-    /**
-     * Helper method to find pattern matches and add findings
-     */
     private void findPattern(String line, int lineNumber, Pattern pattern,
                              List<Finding> findings, String type, String severity, String message) {
         Matcher matcher = pattern.matcher(line);
@@ -236,61 +338,11 @@ public class SensitiveDataDetector {
         }
     }
 
-    /**
-     * Redacts a pattern while keeping a prefix
-     */
-    private String redactPattern(String text, Pattern pattern, int keepChars) {
-        Matcher matcher = pattern.matcher(text);
-        StringBuffer sb = new StringBuffer();
-        while (matcher.find()) {
-            String match = matcher.group();
-            String prefix = match.length() > keepChars ? match.substring(0, keepChars) : "";
-            String replacement = prefix + "***";
-            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(sb);
-        return sb.toString();
-    }
-
-    /**
-     * Redacts password patterns
-     */
-    private String redactPasswordPattern(String text, Pattern pattern) {
-        Matcher matcher = pattern.matcher(text);
-        StringBuffer sb = new StringBuffer();
-        while (matcher.find()) {
-            String prefix = matcher.group(1); // Keep the "password" keyword
-            String fullMatch = matcher.group(0);
-            String replacement;
-            if (fullMatch.contains("(")) {
-                // Method call: setPassword("...")
-                replacement = "." + prefix + "(\"***\")";
-            } else if (fullMatch.contains(",")) {
-                // Map/list: "password", "..."
-                replacement = prefix + ", \"***\"";
-            } else {
-                // Assignment: password = "..."
-                replacement = prefix + " = \"***\"";
-            }
-            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(sb);
-        return sb.toString();
-    }
-
-    /**
-     * Validates credit card number using Luhn algorithm
-     * Helps prevent false positives from random numbers
-     *
-     * @param cardNumber The card number to validate
-     * @return true if valid according to Luhn algorithm
-     */
     private boolean isValidCreditCard(String cardNumber) {
         if (cardNumber == null || cardNumber.length() < 13 || cardNumber.length() > 19) {
             return false;
         }
 
-        // Luhn algorithm
         int sum = 0;
         boolean alternate = false;
 

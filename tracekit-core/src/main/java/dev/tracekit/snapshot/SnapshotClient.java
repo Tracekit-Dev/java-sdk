@@ -9,8 +9,12 @@ import io.opentelemetry.api.trace.SpanContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URL;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -43,6 +47,31 @@ public class SnapshotClient {
 
     private volatile Instant lastFetch;
 
+    // Kill switch: server-initiated monitoring disable
+    private volatile boolean killSwitchActive = false;
+    private ScheduledFuture<?> pollFuture;
+
+    // SSE (Server-Sent Events) real-time updates
+    private volatile String sseEndpoint = null;
+    private volatile boolean sseActive = false;
+    private Thread sseThread = null;
+    private volatile boolean sseStop = false;
+
+    // Opt-in capture limits (all disabled by default: 0 = unlimited)
+    private int captureDepth = 0;
+    private int maxPayload = 0;
+    private long captureTimeoutMs = 0;
+
+    // Circuit breaker state (synchronized via circuitBreakerLock)
+    private final Object circuitBreakerLock = new Object();
+    private final List<Long> circuitBreakerFailureTimestamps = new ArrayList<>();
+    private String circuitBreakerState = "closed";
+    private long circuitBreakerOpenedAt = 0;
+    private int circuitBreakerMaxFailures = 3;
+    private long circuitBreakerWindowMs = 60000;
+    private long circuitBreakerCooldownMs = 300000;
+    private final List<Map<String, Object>> pendingTelemetryEvents = new ArrayList<>();
+
     public SnapshotClient(String apiKey, String baseURL, String serviceName) {
         this.apiKey = apiKey;
         this.baseURL = baseURL;
@@ -53,8 +82,88 @@ public class SnapshotClient {
         this.securityDetector = new SensitiveDataDetector();
     }
 
+    /**
+     * Configure circuit breaker thresholds (0 = use default for that parameter).
+     */
+    public void configureCircuitBreaker(int maxFailures, long windowMs, long cooldownMs) {
+        synchronized (circuitBreakerLock) {
+            if (maxFailures > 0) this.circuitBreakerMaxFailures = maxFailures;
+            if (windowMs > 0) this.circuitBreakerWindowMs = windowMs;
+            if (cooldownMs > 0) this.circuitBreakerCooldownMs = cooldownMs;
+        }
+    }
+
+    private boolean circuitBreakerShouldAllow() {
+        synchronized (circuitBreakerLock) {
+            if ("closed".equals(circuitBreakerState)) {
+                return true;
+            }
+            if (System.currentTimeMillis() - circuitBreakerOpenedAt >= circuitBreakerCooldownMs) {
+                circuitBreakerState = "closed";
+                circuitBreakerFailureTimestamps.clear();
+                logger.info("TraceKit: Code monitoring resumed");
+                return true;
+            }
+            return false;
+        }
+    }
+
+    private boolean circuitBreakerRecordFailure() {
+        synchronized (circuitBreakerLock) {
+            long now = System.currentTimeMillis();
+            circuitBreakerFailureTimestamps.add(now);
+            long cutoff = now - circuitBreakerWindowMs;
+            circuitBreakerFailureTimestamps.removeIf(ts -> ts <= cutoff);
+
+            if (circuitBreakerFailureTimestamps.size() >= circuitBreakerMaxFailures
+                    && "closed".equals(circuitBreakerState)) {
+                circuitBreakerState = "open";
+                circuitBreakerOpenedAt = now;
+                logger.warn("TraceKit: Code monitoring paused ({} capture failures in {}s). Auto-resumes in {} min.",
+                        circuitBreakerMaxFailures, circuitBreakerWindowMs / 1000, circuitBreakerCooldownMs / 60000);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    private void queueCircuitBreakerEvent() {
+        synchronized (pendingTelemetryEvents) {
+            Map<String, Object> event = new HashMap<>();
+            event.put("type", "circuit_breaker_tripped");
+            event.put("service_name", serviceName);
+            event.put("failure_count", circuitBreakerMaxFailures);
+            event.put("window_seconds", circuitBreakerWindowMs / 1000);
+            event.put("cooldown_seconds", circuitBreakerCooldownMs / 1000);
+            event.put("timestamp", Instant.now().toString());
+            pendingTelemetryEvents.add(event);
+        }
+    }
+
+    private List<Map<String, Object>> drainPendingEvents() {
+        synchronized (pendingTelemetryEvents) {
+            if (pendingTelemetryEvents.isEmpty()) return Collections.emptyList();
+            List<Map<String, Object>> drained = new ArrayList<>(pendingTelemetryEvents);
+            pendingTelemetryEvents.clear();
+            return drained;
+        }
+    }
+
+    /** Set opt-in capture depth limit. 0 = unlimited (default). */
+    public void setCaptureDepth(int depth) { this.captureDepth = depth; }
+
+    /** Set opt-in max payload size in bytes. 0 = unlimited (default). */
+    public void setMaxPayload(int bytes) { this.maxPayload = bytes; }
+
+    /** Set opt-in capture timeout in milliseconds. 0 = no timeout (default). */
+    public void setCaptureTimeoutMs(long ms) { this.captureTimeoutMs = ms; }
+
+    public int getCaptureDepth() { return captureDepth; }
+    public int getMaxPayload() { return maxPayload; }
+    public long getCaptureTimeoutMs() { return captureTimeoutMs; }
+
     public void start() {
-        scheduler.scheduleAtFixedRate(
+        pollFuture = scheduler.scheduleAtFixedRate(
             this::fetchActiveBreakpoints,
             0,
             30,
@@ -63,7 +172,24 @@ public class SnapshotClient {
         logger.info("📸 TraceKit Snapshot Client started for service: {}", serviceName);
     }
 
+    private void reschedulePolling(long intervalSeconds) {
+        if (pollFuture != null) {
+            pollFuture.cancel(false);
+        }
+        pollFuture = scheduler.scheduleAtFixedRate(
+            this::fetchActiveBreakpoints,
+            intervalSeconds,
+            intervalSeconds,
+            TimeUnit.SECONDS
+        );
+    }
+
     public void stop() {
+        sseStop = true;
+        sseActive = false;
+        if (sseThread != null) {
+            sseThread.interrupt();
+        }
         scheduler.shutdown();
         try {
             if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -76,12 +202,30 @@ public class SnapshotClient {
         logger.info("📸 TraceKit Snapshot Client stopped");
     }
 
+    /**
+     * Check and capture with context. Crash isolation: catches all Throwable
+     * (including OutOfMemoryError, StackOverflowError) to never crash the host app.
+     */
     public void checkAndCaptureWithContext(String label, Map<String, Object> variables) {
-        logger.debug("🔍 checkAndCaptureWithContext called with label: {}, cache size: {}", label, breakpointsCache.size());
+        try {
+            doCheckAndCapture(label, variables);
+        } catch (Throwable t) {
+            // Crash isolation: never let TraceKit bugs crash the host application
+            logger.error("TraceKit: error in checkAndCaptureWithContext", t);
+        }
+    }
+
+    private void doCheckAndCapture(String label, Map<String, Object> variables) {
+        // Kill switch: skip all capture when server has disabled monitoring
+        if (killSwitchActive) {
+            return;
+        }
+
+        logger.debug("checkAndCaptureWithContext called with label: {}, cache size: {}", label, breakpointsCache.size());
 
         StackTraceElement caller = getCaller();
         if (caller == null) {
-            logger.warn("⚠️  Could not detect caller location");
+            logger.warn("Could not detect caller location");
             return;
         }
 
@@ -89,26 +233,26 @@ public class SnapshotClient {
         int lineNumber = caller.getLineNumber();
         String functionName = caller.getClassName() + "." + caller.getMethodName();
 
-        logger.debug("🔍 Caller detected: file={}, line={}, function={}", filePath, lineNumber, functionName);
+        logger.debug("Caller detected: file={}, line={}, function={}", filePath, lineNumber, functionName);
 
         autoRegisterBreakpoint(filePath, lineNumber, functionName, label);
 
         String locationKey = functionName + ":" + label;
-        logger.debug("🔍 Looking up breakpoint with label key: {}", locationKey);
+        logger.debug("Looking up breakpoint with label key: {}", locationKey);
         BreakpointConfig breakpoint = breakpointsCache.get(locationKey);
 
         if (breakpoint == null) {
             String lineKey = filePath + ":" + lineNumber;
-            logger.debug("🔍 Label key not found, trying line key: {}", lineKey);
+            logger.debug("Label key not found, trying line key: {}", lineKey);
             breakpoint = breakpointsCache.get(lineKey);
             logger.debug("Breakpoint not found by label key {}, trying line key {}: {}", locationKey, lineKey, breakpoint != null ? "found" : "not found");
         } else {
-            logger.debug("✅ Breakpoint found by label key: {} (enabled={})", breakpoint.id, breakpoint.enabled);
+            logger.debug("Breakpoint found by label key: {} (enabled={})", breakpoint.id, breakpoint.enabled);
         }
 
         if (breakpoint == null) {
             logger.debug("No breakpoint found in cache for {} or {}, skipping capture (cache size: {})", locationKey, filePath + ":" + lineNumber, breakpointsCache.size());
-            logger.debug("🔍 Cache keys: {}", breakpointsCache.keySet());
+            logger.debug("Cache keys: {}", breakpointsCache.keySet());
             return;
         }
 
@@ -118,16 +262,21 @@ public class SnapshotClient {
         }
 
         if (breakpoint.expireAt != null && Instant.now().isAfter(breakpoint.expireAt)) {
-            logger.debug("⏰ Breakpoint {} expired at {}, skipping capture", breakpoint.id, breakpoint.expireAt);
+            logger.debug("Breakpoint {} expired at {}, skipping capture", breakpoint.id, breakpoint.expireAt);
             return;
         }
 
         if (breakpoint.maxCaptures > 0 && breakpoint.captureCount >= breakpoint.maxCaptures) {
-            logger.debug("📊 Breakpoint {} reached max captures ({}/{}), skipping", breakpoint.id, breakpoint.captureCount, breakpoint.maxCaptures);
+            logger.debug("Breakpoint {} reached max captures ({}/{}), skipping", breakpoint.id, breakpoint.captureCount, breakpoint.maxCaptures);
             return;
         }
 
-        logger.debug("🚀 All checks passed, preparing to capture snapshot for breakpoint: {}", breakpoint.id);
+        // Apply opt-in capture depth limit
+        if (captureDepth > 0) {
+            variables = limitDepth(variables, 0);
+        }
+
+        logger.debug("All checks passed, preparing to capture snapshot for breakpoint: {}", breakpoint.id);
 
         String stackTrace = Arrays.stream(Thread.currentThread().getStackTrace())
                 .skip(2)
@@ -138,9 +287,9 @@ public class SnapshotClient {
         String traceId = spanContext.isValid() ? spanContext.getTraceId() : null;
         String spanId = spanContext.isValid() ? spanContext.getSpanId() : null;
 
-        logger.debug("🔐 Scanning {} variables for security issues", variables.size());
+        logger.debug("Scanning {} variables for security issues", variables.size());
         SecurityScanResult scanResult = scanForSecurityIssues(variables);
-        logger.debug("🔐 Security scan complete: {} flags found", scanResult.securityFlags.size());
+        logger.debug("Security scan complete: {} flags found", scanResult.securityFlags.size());
 
         Snapshot snapshot = new Snapshot(
             breakpoint.id,
@@ -158,14 +307,56 @@ public class SnapshotClient {
             Instant.now()
         );
 
-        logger.debug("📸 Submitting snapshot capture asynchronously for breakpoint: {}", breakpoint.id);
-        CompletableFuture.runAsync(() -> {
+        logger.debug("Submitting snapshot capture asynchronously for breakpoint: {}", breakpoint.id);
+
+        // Apply opt-in capture timeout
+        if (captureTimeoutMs > 0) {
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                try {
+                    captureSnapshot(snapshot);
+                } catch (Throwable t) {
+                    logger.error("TraceKit: error in async snapshot capture", t);
+                }
+            });
             try {
-                captureSnapshot(snapshot);
-            } catch (Exception e) {
-                logger.error("❌ Exception in async snapshot capture", e);
+                future.get(captureTimeoutMs, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                logger.warn("TraceKit: capture timeout exceeded ({}ms), skipping", captureTimeoutMs);
+                future.cancel(true);
+            } catch (Throwable t) {
+                logger.error("TraceKit: error waiting for capture", t);
             }
-        });
+        } else {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    captureSnapshot(snapshot);
+                } catch (Throwable t) {
+                    logger.error("TraceKit: error in async snapshot capture", t);
+                }
+            });
+        }
+    }
+
+    /** Limit variable depth for opt-in capture depth limiting */
+    private Map<String, Object> limitDepth(Map<String, Object> data, int currentDepth) {
+        if (currentDepth >= captureDepth) {
+            Map<String, Object> truncated = new HashMap<>();
+            truncated.put("_truncated", true);
+            truncated.put("_depth", currentDepth);
+            return truncated;
+        }
+        Map<String, Object> result = new HashMap<>();
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> mapValue = (Map<String, Object>) value;
+                result.put(entry.getKey(), limitDepth(mapValue, currentDepth + 1));
+            } else {
+                result.put(entry.getKey(), value);
+            }
+        }
+        return result;
     }
 
     private StackTraceElement getCaller() {
@@ -220,6 +411,38 @@ public class SnapshotClient {
             try {
                 BreakpointsResponse result = gson.fromJson(response.body(), BreakpointsResponse.class);
                 logger.debug("Parsed {} breakpoints from response", result.breakpoints != null ? result.breakpoints.size() : 0);
+
+                // Handle kill switch state (missing field = false for backward compat)
+                boolean newKillState = result.killSwitch != null && result.killSwitch;
+                if (newKillState && !killSwitchActive) {
+                    logger.warn("TraceKit: Code monitoring disabled by server kill switch. Polling at reduced frequency.");
+                    reschedulePolling(60);
+                } else if (!newKillState && killSwitchActive) {
+                    logger.info("TraceKit: Code monitoring re-enabled by server.");
+                    reschedulePolling(30);
+                }
+                killSwitchActive = newKillState;
+
+                // If kill-switched, close any active SSE connection
+                if (killSwitchActive && sseActive) {
+                    sseStop = true;
+                    sseActive = false;
+                    if (sseThread != null) sseThread.interrupt();
+                    logger.info("TraceKit: SSE connection closed due to kill switch");
+                }
+
+                // SSE auto-discovery: if sse_endpoint present and not already connected
+                if (result.sseEndpoint != null && !result.sseEndpoint.isEmpty()
+                        && !sseActive && !killSwitchActive
+                        && result.breakpoints != null && !result.breakpoints.isEmpty()) {
+                    sseEndpoint = result.sseEndpoint;
+                    sseStop = false;
+                    sseThread = new Thread(() -> connectSSE(result.sseEndpoint));
+                    sseThread.setDaemon(true);
+                    sseThread.setName("tracekit-sse");
+                    sseThread.start();
+                }
+
                 updateBreakpointCache(result.breakpoints);
                 lastFetch = Instant.now();
             } catch (Exception e) {
@@ -231,6 +454,136 @@ public class SnapshotClient {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    /**
+     * Connect to SSE endpoint for real-time breakpoint updates.
+     * Falls back to polling if SSE connection fails or is interrupted.
+     */
+    private void connectSSE(String endpoint) {
+        try {
+            String fullURL = baseURL + endpoint;
+            URL url = new URL(fullURL);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("X-API-Key", apiKey);
+            conn.setRequestProperty("Accept", "text/event-stream");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(0); // No read timeout for SSE
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                logger.warn("TraceKit: SSE endpoint returned {}, falling back to polling", responseCode);
+                sseActive = false;
+                return;
+            }
+
+            sseActive = true;
+            logger.info("TraceKit: SSE connection established for real-time breakpoint updates");
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                String eventType = "";
+                StringBuilder dataBuffer = new StringBuilder();
+                String line;
+
+                while (!sseStop && (line = reader.readLine()) != null) {
+                    if (line.startsWith("event:")) {
+                        eventType = line.substring(6).trim();
+                    } else if (line.startsWith("data:")) {
+                        if (dataBuffer.length() > 0) dataBuffer.append("\n");
+                        dataBuffer.append(line.substring(5).trim());
+                    } else if (line.isEmpty()) {
+                        // Empty line = event boundary
+                        if (!eventType.isEmpty() && dataBuffer.length() > 0) {
+                            handleSSEEvent(eventType, dataBuffer.toString());
+                        }
+                        eventType = "";
+                        dataBuffer.setLength(0);
+                    }
+                }
+            }
+
+            logger.info("TraceKit: SSE connection closed, falling back to polling");
+
+        } catch (Throwable t) {
+            // Crash isolation: catch all including OOM, StackOverflow
+            if (!sseStop) {
+                logger.warn("TraceKit: SSE connection lost, falling back to polling: {}", t.getMessage());
+            }
+        } finally {
+            sseActive = false;
+        }
+    }
+
+    /**
+     * Process a single SSE event.
+     */
+    @SuppressWarnings("unchecked")
+    private void handleSSEEvent(String eventType, String data) {
+        try {
+            switch (eventType) {
+                case "init": {
+                    Map<String, Object> initData = gson.fromJson(data, Map.class);
+                    List<Map<String, Object>> bpList = (List<Map<String, Object>>) initData.get("breakpoints");
+                    List<BreakpointConfig> breakpoints = new ArrayList<>();
+                    if (bpList != null) {
+                        // Re-parse via JSON to get proper BreakpointConfig objects
+                        String bpJson = gson.toJson(bpList);
+                        BreakpointConfig[] bpArray = gson.fromJson(bpJson, BreakpointConfig[].class);
+                        breakpoints = Arrays.asList(bpArray);
+                    }
+                    updateBreakpointCache(breakpoints);
+                    Object ks = initData.get("kill_switch");
+                    killSwitchActive = ks instanceof Boolean && (Boolean) ks;
+                    if (killSwitchActive) {
+                        sseStop = true;
+                    }
+                    logger.info("TraceKit: SSE init received, {} breakpoints loaded", breakpoints.size());
+                    break;
+                }
+
+                case "breakpoint_created":
+                case "breakpoint_updated": {
+                    BreakpointConfig bp = gson.fromJson(data, BreakpointConfig.class);
+                    if (bp.label != null && !bp.label.isEmpty() && bp.functionName != null) {
+                        String labelKey = bp.functionName + ":" + bp.label;
+                        breakpointsCache.put(labelKey, bp);
+                    }
+                    String lineKey = bp.filePath + ":" + bp.lineNumber;
+                    breakpointsCache.put(lineKey, bp);
+                    logger.info("TraceKit: SSE breakpoint {}: {}", eventType, bp.id);
+                    break;
+                }
+
+                case "breakpoint_deleted": {
+                    Map<String, String> deleteData = gson.fromJson(data, Map.class);
+                    String bpId = deleteData.get("id");
+                    breakpointsCache.entrySet().removeIf(entry -> entry.getValue().id.equals(bpId));
+                    logger.info("TraceKit: SSE breakpoint deleted: {}", bpId);
+                    break;
+                }
+
+                case "kill_switch": {
+                    Map<String, Object> ksData = gson.fromJson(data, Map.class);
+                    Object enabled = ksData.get("enabled");
+                    killSwitchActive = enabled instanceof Boolean && (Boolean) enabled;
+                    if (killSwitchActive) {
+                        logger.info("TraceKit: Kill switch enabled via SSE, closing connection");
+                        sseStop = true;
+                    }
+                    break;
+                }
+
+                case "heartbeat":
+                    // No action needed -- keeps connection alive
+                    break;
+
+                default:
+                    logger.warn("TraceKit: unknown SSE event type: {}", eventType);
+            }
+        } catch (Throwable t) {
+            logger.error("TraceKit: error handling SSE event {}", eventType, t);
         }
     }
 
@@ -311,14 +664,41 @@ public class SnapshotClient {
     }
 
     private void captureSnapshot(Snapshot snapshot) {
-        logger.debug("📸 captureSnapshot called for breakpoint: {}", snapshot.breakpointId);
+        // Circuit breaker check
+        if (!circuitBreakerShouldAllow()) {
+            return;
+        }
+
         try {
             String url = baseURL + "/sdk/snapshots/capture";
-            logger.debug("📸 Serializing snapshot to JSON");
-            String jsonPayload = gson.toJson(snapshot);
-            logger.debug("📸 Snapshot JSON payload: {} bytes", jsonPayload.length());
+            String jsonPayload;
+            try {
+                jsonPayload = gson.toJson(snapshot);
+            } catch (Throwable t) {
+                // Serialization error -- do NOT count as circuit breaker failure
+                logger.error("TraceKit: serialization error, sending minimal snapshot", t);
+                Map<String, Object> fallbackVars = new HashMap<>();
+                fallbackVars.put("_error", "serialization failed: " + t.getMessage());
+                snapshot = new Snapshot(snapshot.breakpointId, snapshot.serviceName, snapshot.filePath,
+                    snapshot.functionName, snapshot.label, snapshot.lineNumber, fallbackVars,
+                    snapshot.securityFlags, snapshot.stackTrace, snapshot.traceId, snapshot.spanId,
+                    snapshot.requestContext, snapshot.capturedAt);
+                jsonPayload = gson.toJson(snapshot);
+            }
 
-            logger.debug("📸 Sending POST to: {}", url);
+            // Apply opt-in max payload limit
+            if (maxPayload > 0 && jsonPayload.getBytes().length > maxPayload) {
+                Map<String, Object> truncatedVars = new HashMap<>();
+                truncatedVars.put("_truncated", true);
+                truncatedVars.put("_payload_size", jsonPayload.getBytes().length);
+                truncatedVars.put("_max_payload", maxPayload);
+                snapshot = new Snapshot(snapshot.breakpointId, snapshot.serviceName, snapshot.filePath,
+                    snapshot.functionName, snapshot.label, snapshot.lineNumber, truncatedVars,
+                    snapshot.securityFlags, snapshot.stackTrace, snapshot.traceId, snapshot.spanId,
+                    snapshot.requestContext, snapshot.capturedAt);
+                jsonPayload = gson.toJson(snapshot);
+            }
+
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("X-API-Key", apiKey)
@@ -329,59 +709,62 @@ public class SnapshotClient {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() == 200 || response.statusCode() == 201) {
-                logger.info("📸 Snapshot captured: {}", snapshot.label != null ? snapshot.label : snapshot.filePath);
+                logger.info("Snapshot captured: {}", snapshot.label != null ? snapshot.label : snapshot.filePath);
+            } else if (response.statusCode() >= 500) {
+                // Server error -- count as circuit breaker failure
+                logger.error("Failed to capture snapshot: HTTP {}", response.statusCode());
+                if (circuitBreakerRecordFailure()) {
+                    queueCircuitBreakerEvent();
+                }
             } else {
-                logger.error("⚠️  Failed to capture snapshot: HTTP {}", response.statusCode());
+                // Client error (4xx) -- do NOT count as circuit breaker failure
+                logger.error("Failed to capture snapshot: HTTP {}", response.statusCode());
             }
 
         } catch (IOException | InterruptedException e) {
-            logger.error("⚠️  Failed to capture snapshot", e);
+            // Network/timeout error -- count as circuit breaker failure
+            logger.error("TraceKit: error in captureSnapshot", e);
+            if (circuitBreakerRecordFailure()) {
+                queueCircuitBreakerEvent();
+            }
             if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+        } catch (Throwable t) {
+            // Crash isolation: catch all including OOM, StackOverflow
+            logger.error("TraceKit: error in captureSnapshot", t);
+            if (t instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
         }
     }
 
     private SecurityScanResult scanForSecurityIssues(Map<String, Object> variables) {
-        List<SecurityFlag> securityFlags = new ArrayList<>();
-        Map<String, Object> sanitized = new HashMap<>();
-
-        for (Map.Entry<String, Object> entry : variables.entrySet()) {
-            String name = entry.getKey();
-            Object value = entry.getValue();
-
-            if (name.toLowerCase().matches(".*(password|secret|token|key|credential).*")) {
-                securityFlags.add(new SecurityFlag(
-                    "sensitive_variable_name",
-                    "medium",
-                    name
-                ));
-                sanitized.put(name, "[REDACTED]");
-                continue;
-            }
-
-            String serialized = String.valueOf(value);
-            List<SensitiveDataDetector.Finding> findings = securityDetector.scan(serialized);
-
-            if (!findings.isEmpty()) {
-                for (SensitiveDataDetector.Finding finding : findings) {
-                    securityFlags.add(new SecurityFlag(
-                        "sensitive_data_" + finding.getType().toLowerCase(),
-                        finding.getSeverity().toLowerCase(),
-                        name
-                    ));
-                }
-                sanitized.put(name, "[REDACTED]");
-            } else {
-                sanitized.put(name, value);
-            }
+        if (variables == null || variables.isEmpty()) {
+            return new SecurityScanResult(new HashMap<>(), new ArrayList<>());
         }
 
-        return new SecurityScanResult(sanitized, securityFlags);
+        // Delegate to SensitiveDataDetector.scanVariables() for typed [REDACTED:type] markers
+        SensitiveDataDetector.ScanResult result = securityDetector.scanVariables(variables);
+
+        // Map SensitiveDataDetector.SecurityFlag -> SnapshotClient.SecurityFlag
+        // (drop the 'redacted' boolean -- SnapshotClient's SecurityFlag doesn't have it)
+        List<SecurityFlag> mappedFlags = new ArrayList<>();
+        for (SensitiveDataDetector.SecurityFlag flag : result.getSecurityFlags()) {
+            mappedFlags.add(new SecurityFlag(flag.getType(), flag.getSeverity(), flag.getVariable()));
+        }
+
+        return new SecurityScanResult(result.getSanitizedVariables(), mappedFlags);
     }
 
     static class BreakpointsResponse {
         public List<BreakpointConfig> breakpoints = new ArrayList<>();
+
+        @SerializedName("kill_switch")
+        public Boolean killSwitch;
+
+        @SerializedName("sse_endpoint")
+        public String sseEndpoint;
     }
 
     static class BreakpointConfig {

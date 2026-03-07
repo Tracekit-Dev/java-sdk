@@ -277,6 +277,25 @@ public class DemoApplication {
     }
 
     /**
+     * Security test endpoint - demonstrates PII scrubbing in snapshots.
+     */
+    @GetMapping("/security-test")
+    public ResponseEntity<Map<String, Object>> securityTest() {
+        Map<String, Object> capturedVars = new HashMap<>();
+        capturedVars.put("password", "super_secret_123");
+        capturedVars.put("api_key", "sk_live_abc123def456");
+        capturedVars.put("user_token", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.signature");
+        capturedVars.put("credit_card", "4532-1234-5678-9012");
+        capturedVars.put("normal_var", "this is fine");
+
+        tracekitSDK.captureSnapshot("security-test-with-sensitive-data", capturedVars);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("message", "Security test completed - check snapshot for PII scrubbing");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * Metrics endpoint - displays current metrics summary.
      */
     @GetMapping("/metrics")

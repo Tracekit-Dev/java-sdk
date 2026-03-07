@@ -33,7 +33,7 @@ For Spring Boot applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-spring-boot-starter</artifactId>
-    <version>1.3.1</version>
+    <version>1.4.0</version>
 </dependency>
 ```
 
@@ -43,7 +43,7 @@ For vanilla Java applications:
 <dependency>
     <groupId>dev.tracekit</groupId>
     <artifactId>tracekit-core</artifactId>
-    <version>1.3.1</version>
+    <version>1.4.0</version>
 </dependency>
 ```
 
@@ -52,13 +52,13 @@ For vanilla Java applications:
 For Spring Boot applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-spring-boot-starter:1.3.1'
+implementation 'dev.tracekit:tracekit-spring-boot-starter:1.4.0'
 ```
 
 For vanilla Java applications:
 
 ```gradle
-implementation 'dev.tracekit:tracekit-core:1.3.1'
+implementation 'dev.tracekit:tracekit-core:1.4.0'
 ```
 
 ## Quick Start
@@ -215,6 +215,92 @@ TraceKit automatically scans captured snapshots for sensitive information when c
 - **Security Flags**: Each detection creates a security flag with severity level (CRITICAL, HIGH, MEDIUM, LOW)
 
 Security scanning happens automatically for all `captureSnapshot()` calls - no additional configuration needed.
+
+## Kill Switch
+
+TraceKit provides a server-side kill switch to disable code monitoring per service without redeploying. The SDK checks the kill switch state via polling (every 30 seconds) and SSE (Server-Sent Events) for real-time updates.
+
+When the kill switch is activated:
+
+- All snapshot captures are immediately halted (`killSwitchActive` flag prevents all captures)
+- Polling frequency reduces to 60 seconds to minimize server load
+- When disabled, code monitoring resumes automatically with no restart required
+
+The kill switch is controlled from the TraceKit dashboard or via the API:
+
+```java
+// The SDK handles kill switch automatically - no code changes needed.
+// When kill switch is active, captureSnapshot() calls are silently skipped.
+
+TracekitConfig config = TracekitConfig.builder()
+    .apiKey(System.getenv("TRACEKIT_API_KEY"))
+    .serviceName("my-service")
+    .enableCodeMonitoring(true)
+    .build();
+
+TracekitSDK sdk = TracekitSDK.create(config);
+
+// This call is safely skipped when kill switch is active
+sdk.captureSnapshot("checkout-flow", variables);
+```
+
+## SSE Real-time Updates
+
+The SDK automatically discovers the SSE endpoint from the poll response and establishes a persistent connection for real-time updates. This eliminates the delay of polling intervals for critical changes.
+
+Supported SSE event types:
+
+| Event | Description |
+|-------|-------------|
+| `init` | Initial state synchronization on connection |
+| `breakpoint_created` | New breakpoint added from dashboard |
+| `breakpoint_updated` | Existing breakpoint modified |
+| `breakpoint_deleted` | Breakpoint removed |
+| `kill_switch` | Kill switch state changed |
+| `heartbeat` | Connection keep-alive |
+
+```java
+// SSE is enabled automatically when code monitoring is active.
+// No additional configuration required.
+
+TracekitConfig config = TracekitConfig.builder()
+    .apiKey(System.getenv("TRACEKIT_API_KEY"))
+    .serviceName("my-service")
+    .enableCodeMonitoring(true)  // SSE auto-discovered from poll response
+    .build();
+
+TracekitSDK sdk = TracekitSDK.create(config);
+// SDK connects to SSE endpoint automatically
+// Falls back to polling if SSE connection fails
+```
+
+If the SSE connection drops, the SDK falls back to standard polling and will attempt to re-establish the SSE connection on the next successful poll.
+
+## Circuit Breaker
+
+The SDK includes a built-in circuit breaker to protect your application from cascading failures during snapshot capture. If the capture pipeline encounters repeated errors, the circuit breaker temporarily pauses code monitoring.
+
+**Behavior:**
+
+- **Threshold**: After **3 capture failures** within a **60-second** window, the circuit breaker opens
+- **Cooldown**: Code monitoring pauses for **5 minutes** before automatically retrying
+- **Crash Isolation**: All exceptions including `Throwable` are caught to prevent SDK errors from affecting your application
+
+```java
+// Circuit breaker operates automatically - no configuration needed.
+// Example: if the TraceKit backend is temporarily unavailable,
+// the SDK will pause captures after 3 failures and retry after 5 minutes.
+
+try {
+    sdk.captureSnapshot("payment-processing", variables);
+} catch (Throwable t) {
+    // This never happens - the SDK catches all exceptions internally
+    // and increments the circuit breaker failure counter
+}
+
+// After 3 failures in 60s, subsequent calls are silently skipped
+// After 5-minute cooldown, captures resume automatically
+```
 
 ## Metrics
 

@@ -7,10 +7,10 @@ server:
 
 tracekit:
   enabled: true
-  api-key: ctxio_c16d0728ea99bbd5b849c6341e49dff99263018a19992faafe815e76b01dee97
+  api-key: ctxio_0fe8fb7749f225cf8a88a8ba7d36881a015734e0fd12e350f77b131e0c4da794
   service-name: javasdk
   environment: development
-  endpoint: https://app.tracekit.dev
+  endpoint: http://localhost:8081
   enable-code-monitoring: true
   local-ui-port: 9999
 
