@@ -284,8 +284,8 @@ public class SnapshotClient {
                 .collect(Collectors.joining("\n"));
 
         SpanContext spanContext = Span.current().getSpanContext();
-        String traceId = spanContext.isValid() ? spanContext.getTraceId() : null;
-        String spanId = spanContext.isValid() ? spanContext.getSpanId() : null;
+        String traceId = spanContext.isValid() && spanContext.isSampled() ? spanContext.getTraceId() : null;
+        String spanId = spanContext.isValid() && spanContext.isSampled() ? spanContext.getSpanId() : null;
 
         logger.debug("Scanning {} variables for security issues", variables.size());
         SecurityScanResult scanResult = scanForSecurityIssues(variables);
