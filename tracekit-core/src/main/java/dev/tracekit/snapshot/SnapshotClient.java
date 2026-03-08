@@ -568,6 +568,7 @@ public class SnapshotClient {
                     Map<String, Object> ksData = gson.fromJson(data, Map.class);
                     Object enabled = ksData.get("enabled");
                     killSwitchActive = enabled instanceof Boolean && (Boolean) enabled;
+                    reschedulePolling(killSwitchActive ? 60 : 30);
                     if (killSwitchActive) {
                         logger.info("TraceKit: Kill switch enabled via SSE, closing connection");
                         sseStop = true;
@@ -576,7 +577,8 @@ public class SnapshotClient {
                 }
 
                 case "heartbeat":
-                    // No action needed -- keeps connection alive
+                case "sdk_count":
+                    // No action needed -- heartbeat keeps connection alive, sdk_count is for dashboard UI
                     break;
 
                 default:
